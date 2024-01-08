@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>fabric-path-editor</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+  <script>
+    fabric.fabric = fabric;
+  </script>
+  <style>
+    div {
+      margin: 20px auto;
+    }
+
+    .container {
+      max-width: 500px;
+    }
+
+    canvas {
+      border: 1px solid #eee;
+      border-radius: 4px;
+    }
+
+    label {
+      font-size: 14px;
+      font-weight: bold;
+      display: block;
+      margin: 8px 0;
+    }
+
+    input, textarea {
+      box-sizing: border-box;
+      width: 100%;
+      line-height: 22px;
+      min-height: 30px;
+      border: 1px solid #eee;
+      border-radius: 4px;
+      outline-color: #29ca6e;
+    }
+
+    .tips {
+      font-size: 12px;
+      color: #bebebe;
+    }
+
+    .svgs > div {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 10px;
+      background-color: #f1f1f1;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div>
+      <label for="input">文本内容</label>
+      <input id="input" placeholder="Hello World!"/>
+    </div>
+    <div>
+      <label for="path">路径</label>
+      <textarea id="path" rows="3">M 248 166 C 292 65 464 166 248 296 C 31 166 204 65 248 166z</textarea>
+    </div>
+    <div class="tips">
+      <p><strong>Tips</strong></p>
+      <p>① 点击创建路径点，默认创建直线路径。</p>
+      <p>② 点击线段内可创建曲线调整点，使之逐步升级为三阶贝塞尔曲线。</p>
+      <p>③ 点击节点，可以聚焦节点，聚焦使点击Delete可删除节点，如果是曲线则逐步退化为直线，如果是直线将被直接删除。</p>
+      <p>④ 在闭合路径上添加新节点，新节点也会自行闭合路径。</p>
+      <p>⑤ 双击文本素材进入路径编辑模式，默认编辑模式。</p>
+    </div>
+    <canvas id="canvas" width="500" height="400"></canvas>
+    <div class="svgs">
+      <div>
+        <svg view-box="0 0 200 40" width="200" height="40">
+          <path d="M 20 30 Q 100 -20 180 30" fill="none" stroke="#333" stroke-width="3"></path>
+        </svg>
+        <div>M 20 30 Q 100 -20 180 30</div>
+      </div>
+      <div>
+        <svg view-box="0 0 200 40" width="200" height="40">
+          <path d="M 20 30 L 100 5 L 180 30" fill="none" stroke="#333" stroke-width="3"></path>
+        </svg>
+        <div>M 20 30 L 100 5 L 180 30</div>
+      </div>
+    </div>
+  </div>
+  <script src="./index.js" async></script>
+</body>
+</html>
