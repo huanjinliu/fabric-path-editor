@@ -1,37 +1,42 @@
 {
   "name": "fabric-path-editor",
   "version": "1.0.0",
-  "description": "fabricjs路径编辑器",
+  "description": "An editor of path for Fabric.js(http://fabricjs.com)",
+  "main": "index.js",
   "scripts": {
-    "dev": "cross-env NODE_ENV=development npm run watch --silent",
-    "build": "rollup --config",
-    "watch": "rollup --config -w --silent",
-    "build:type": "tsc"
+    "dev": "rollup --config --environment ENV:dev --watch",
+    "build": "rollup --config"
   },
-  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huanjinliu/fabric-path-editor.git"
+  },
   "author": "",
-  "license": "ISC",
-  "brower": "dist/fabricPathEditor.js",
-  "module": "dist/fabricPathEditor.esm.js",
+  "bugs": {
+    "url": "https://github.com/huanjinliu/fabric-path-editor/issues"
+  },
+  "homepage": "https://github.com/huanjinliu/fabric-path-editor#readme",
   "devDependencies": {
-    "@babel/core": "^7.23.7",
-    "@babel/preset-env": "^7.23.7",
+    "@babel/core": "^7.23.9",
     "@rollup/plugin-babel": "^6.0.4",
     "@rollup/plugin-commonjs": "^25.0.7",
+    "@rollup/plugin-dynamic-import-vars": "^2.1.2",
+    "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^15.2.3",
-    "@rollup/plugin-typescript": "^11.1.5",
-    "@types/fabric": "^5.3.6",
-    "rollup-plugin-peer-deps-external": "^2.2.4",
-    "cross-env": "^7.0.3",
-    "rollup": "^4.9.4",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/fabric": "^5.3.7",
+    "fabric": "^5.3.0",
+    "rollup": "^4.9.6",
     "rollup-plugin-clear": "^2.0.7",
+    "rollup-plugin-copy": "^3.5.0",
     "rollup-plugin-livereload": "^2.0.5",
+    "rollup-plugin-peer-deps-external": "^2.2.4",
     "rollup-plugin-serve": "^1.1.1",
-    "rollup-plugin-terser": "^7.0.2",
     "tslib": "^2.6.2",
     "typescript": "^5.3.3"
   },
   "peerDependencies": {
-    "fabric": "5.3.0"
+    "fabric": "^5.3.0"
   }
 }
