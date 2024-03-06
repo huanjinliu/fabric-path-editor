@@ -1,7 +1,7 @@
 import { fabric } from 'fabric';
 
 /** 创建默认控制点 */
-export const CREATE_DEFAULT_POINTER = (isMajor = true) => {
+export const CREATE_DEFAULT_POINTER = () => {
   const object = new fabric.Circle({
     strokeWidth: 4,
     radius: 6,
@@ -10,24 +10,6 @@ export const CREATE_DEFAULT_POINTER = (isMajor = true) => {
     originX: 'center',
     originY: 'center'
   });
-  object.on('mouseover', () => {
-    object.set({ fill: '#7ef4ad' });
-    object.canvas?.renderAll();
-  });
-  object.on('mouseout', () => {
-    object.set({ fill: object.canvas?.getActiveObject() === object ? '#29ca6e' : '#ffffff' });
-    object.canvas?.renderAll();
-  });
-  object.on('selected', () => {
-    object.set({ fill: '#29ca6e' });
-    object.canvas?.renderAll();
-  });
-  object.on('deselected', () => {
-    object.set({ fill: '#ffffff' });
-    object.canvas?.renderAll();
-  });
-
-  if (!isMajor) object.set({ opacity: 0.2 });
 
   return object;
 };
@@ -40,7 +22,9 @@ export const CREATE_DEFAULT_LINE = () =>
     strokeDashArray: [4, 3],
     strokeUniform: true,
     selectable: false,
-    evented: false
+    evented: false,
+    originX: 'center',
+    originY: 'center'
   });
 
 /** 创建默认默认左右侧拓展点 */
@@ -50,24 +34,6 @@ export const CREATE_DEFAULT_TRIGGER = () => {
     fill: '#bebebe',
     originX: 'center',
     originY: 'center'
-  });
-  object.on('mouseover', () => {
-    object.set({
-      strokeWidth: 4,
-      radius: 4,
-      fill: '#ffffff',
-      stroke: '#4b4b4b'
-    });
-    object.canvas?.renderAll();
-  });
-  object.on('mouseout', () => {
-    object.set({
-      strokeWidth: 0,
-      radius: 5,
-      fill: '#bebebe',
-      stroke: 'transparent'
-    });
-    object.canvas?.renderAll();
   });
   return object;
 };

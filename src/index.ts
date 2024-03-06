@@ -117,6 +117,11 @@ class FabricPathEditor {
   } | null = null;
 
   /**
+   * 当前选中的关键点
+   */
+  _curSelectMajorPoint?: EditorControlPoint;
+
+  /**
    * 构造函数，需指定编辑器交互的目标画布
    * @param platform 绘制的
    */
@@ -280,8 +285,10 @@ class FabricPathEditor {
 
     // 画布禁止框选
     canvas.selection = false;
-    // 画布取消元素选中
-    canvas.discardActiveObject();
+    canvas.preserveObjectStacking = true,
+      canvas.controlsAboveOverlay = true,
+      // 画布取消元素选中
+      canvas.discardActiveObject();
     // 将当前画布所有元素变为不可操作，且透明度调整为「backgroundOpacity」，仅充当背景
     canvas.forEachObject((object) => {
       object.set({ selectable: false });
@@ -455,93 +462,6 @@ class FabricPathEditor {
   }
 
   /**
-   * 添加控制点事件
-   */
-  private _addControlPointEvents(point: EditorControlPoint) {
-    const canvas = this._platform;
-
-    // 被选中时
-    point.on('selected', () => {
-      point.item(0).set({
-        fill: '#29ca6e'
-      });
-
-      const { cur, pre, next } = this._getPointAroundPoints(point);
-
-      // console.log(cur, pre, next);
-
-      const { preHandler, nextHandler } = this.controllers;
-
-      // 绘制控制柄
-      [
-        {
-          target: preHandler,
-          instruction: pre,
-          hidden: !pre?.point || !cur || cur.instruction[0] === InstructionType.LINE,
-        },
-        {
-          target: nextHandler,
-          instruction: next,
-          hidden: !next?.point || next.instruction[0] === InstructionType.LINE
-        }
-      ].forEach(({ target, instruction, hidden }) => {
-        if (!target) return;
-
-        if (hidden) {
-          this._observe(target.point, () => {});
-          return;
-        }
-
-        if (!instruction?.point) return;
-
-        const handleCrood = this._withSourceTransform(instruction.point);
-
-        target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
-        target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
-
-        this._observe(target.point, (key, value) => {
-          target.line.set({
-            x1: point.left,
-            y1: point.top,
-            x2: target.point.left,
-            y2: target.point.top,
-          });
-
-          if (key === 'left')
-            instruction.instruction[instruction.instructionValueIdx] = value;
-          if (key === 'top')
-            instruction.instruction[instruction.instructionValueIdx + 1] = value;
-        });
-
-        target.point.set(handleCrood);
-        canvas.add(target.line, target.point);
-      })
-
-      // console.log(JSON.parse(JSON.stringify(this.target?.path)));
-
-      canvas.renderAll();
-    });
-    // 被取消选中时
-    point.on('deselected', () => {
-      point.item(0).set({
-        fill: '#ffffff'
-      });
-
-      const { preHandler, nextHandler } = this.controllers;
-
-      if (preHandler) {
-        canvas.remove(preHandler.point);
-        canvas.remove(preHandler.line);
-      }
-
-      if (nextHandler) {
-        canvas.remove(nextHandler.point);
-        canvas.remove(nextHandler.line);
-      }
-    });
-  }
-
-  /**
    * 初始路径控制点
    */
   private _initPathControlPoints() {
@@ -622,8 +542,8 @@ class FabricPathEditor {
       // 将目标对象的变换应用到操作点上
       point.set(this._withSourceTransform({ x, y }));
 
-      // 添加控制点事件
-      this._addControlPointEvents(point);
+      // 添加控制点事件——改用canvas全局代理来选中节点
+      // this._addControlPointEvents(point);
 
       points.push(point);
     });
@@ -691,26 +611,26 @@ class FabricPathEditor {
   /**
    * 处理画布元素移动
    */
-  private _handleCanvasObjectMove({ target }: fabric.IEvent<Event>) {
-    const controller = (target as EditorControlPoint)[PATH_CONTROLLER_INFO];
-    if (!controller) return;
+  // private _handleCanvasObjectMove({ target }: fabric.IEvent<Event>) {
+  //   const controller = (target as EditorControlPoint)[PATH_CONTROLLER_INFO];
+  //   if (!controller) return;
 
-    const { type, instruction, instructionValueIdx } = controller;
-    if (!instruction || !instructionValueIdx) return;
+  //   const { type, instruction, instructionValueIdx } = controller;
+  //   if (!instruction || !instructionValueIdx) return;
 
-    // const { left = 0, top = 0 } = target as EditorControlPoint;
+  //   // const { left = 0, top = 0 } = target as EditorControlPoint;
 
-    switch (type) {
-      case ControlType.MAJOR_POINT:
-      case ControlType.SUB_POINT:
-        // const crood = this._invertSourceTransform({ x: left, y: top });
-        // instruction[instructionValueIdx] = crood.left;
-        // instruction[instructionValueIdx + 1] = crood.top;
-        break;
-      default:
-        break;
-    }
-  }
+  //   switch (type) {
+  //     case ControlType.MAJOR_POINT:
+  //     case ControlType.SUB_POINT:
+  //       // const crood = this._invertSourceTransform({ x: left, y: top });
+  //       // instruction[instructionValueIdx] = crood.left;
+  //       // instruction[instructionValueIdx + 1] = crood.top;
+  //       break;
+  //     default:
+  //       break;
+  //   }
+  // }
 
   /**
    * 添加事件监听
@@ -758,22 +678,150 @@ class FabricPathEditor {
   }
 
   /**
+   * 处理画布元素选中和取消选中事件（当前不支持多元素选中）
+   */
+  private _handleObjectsSelectEvent = (selectedPoints: EditorControlPoint[], deselectedPoints: EditorControlPoint[]) => {
+    const canvas = this._platform;
+    const { preHandler, nextHandler } = this.controllers;
+
+    const point = selectedPoints[0];
+
+    const initHandlersStyle = () => {
+      [preHandler, nextHandler].forEach(handler => {
+        if (handler) {
+          // 样式恢复
+        }
+      });
+    }
+
+    const deselectOldMajorPoint = (point?: EditorControlPoint) => {
+      if (!point) return;
+
+      point.item(0).set({
+        fill: '#ffffff'
+      });
+
+      const { preHandler, nextHandler } = this.controllers;
+
+      if (preHandler) {
+        canvas.remove(preHandler.point);
+        canvas.remove(preHandler.line);
+      }
+
+      if (nextHandler) {
+        canvas.remove(nextHandler.point);
+        canvas.remove(nextHandler.line);
+      }
+    }
+
+    const selectNewMajorPoint = (point: EditorControlPoint) => {
+      point.item(0).set({
+        fill: '#29ca6e'
+      });
+
+      const { cur, pre, next } = this._getPointAroundPoints(point);
+
+      // console.log(cur, pre, next);
+
+      const { preHandler, nextHandler } = this.controllers;
+
+      // 绘制控制柄
+      [
+        {
+          target: preHandler,
+          instruction: pre,
+          hidden: !pre?.point || !cur || cur.instruction[0] === InstructionType.LINE,
+        },
+        {
+          target: nextHandler,
+          instruction: next,
+          hidden: !next?.point || next.instruction[0] === InstructionType.LINE
+        }
+      ].forEach(({ target, instruction, hidden }) => {
+        if (!target) return;
+
+        if (hidden) {
+          this._observe(target.point, () => { });
+          return;
+        }
+
+        if (!instruction?.point) return;
+
+        const handleCrood = this._withSourceTransform(instruction.point);
+
+        target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
+        target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
+
+        this._observe(target.point, (key, value) => {
+          target.line.set({
+            x1: point.left,
+            y1: point.top,
+            x2: target.point.left,
+            y2: target.point.top,
+          });
+
+          if (key === 'left')
+            instruction.instruction[instruction.instructionValueIdx] = value;
+          if (key === 'top')
+            instruction.instruction[instruction.instructionValueIdx + 1] = value;
+        });
+
+        target.point.set(handleCrood);
+
+        canvas.add(target.line, target.point);
+      })
+
+      // console.log(JSON.parse(JSON.stringify(this.target?.path)));
+
+      canvas.renderAll();
+    }
+
+    const selectSubPoint = (point: EditorControlPoint) => {
+      const handler = [preHandler, nextHandler].find(i => i?.point === point);
+      if (handler) {
+        // 样式替换
+      }
+    }
+
+    initHandlersStyle();
+
+    if (point) {
+      if (point[PATH_CONTROLLER_INFO].type === ControlType.MAJOR_POINT) {
+        deselectOldMajorPoint(this._curSelectMajorPoint);
+        selectNewMajorPoint(point)
+        this._curSelectMajorPoint = point;
+      }
+
+      if (point[PATH_CONTROLLER_INFO].type === ControlType.SUB_POINT) {
+        selectSubPoint(point);
+      }
+    } else {
+      deselectOldMajorPoint(this._curSelectMajorPoint);
+      this._curSelectMajorPoint = undefined;
+    }
+
+    canvas.renderAll();
+  }
+
+  /**
    * 添加关键点鼠标操作监听事件
    */
   private _initPointOperateEvents() {
-    // this._on('canvas', 'mouse:down:before', (e) => {
-    //   console.log(e);
-    // })
-    // this._on('canvas', 'mouse:down', (e) => {
-    //   console.log(e);
-    // })
-    this._on('canvas', 'object:moving', this._handleCanvasObjectMove.bind(this))
+    this._on('canvas', 'selection:created', (e) => {
+      this._handleObjectsSelectEvent(e.selected, [])
+    })
+    this._on('canvas', 'selection:updated', (e) => {
+      this._handleObjectsSelectEvent(e.selected, e.deselected)
+    })
+    this._on('canvas', 'selection:cleared', (e) => {
+      this._handleObjectsSelectEvent([], e.deselected)
+    })
   }
 
   /**
    * 进入路径编辑
    */
-  async enterEditing(overwrite?: (clonePath: fabric.Path) => fabric.Path) {
+  async enterEditing(overwrite?: (clonePath: fabric.Path) => void) {
     if (!this.source || this.source.type !== 'path') {
       throw Error('Please observe target path before editing.');
     }
