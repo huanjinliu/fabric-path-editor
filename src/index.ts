@@ -303,14 +303,10 @@ class FabricPathEditor {
     let preInstruction = path[instructionIdx - 1];
     let nextInstruction = path[instructionIdx + 1];
 
-    // 如果没有上一个指令，则判定是否是闭合路径，闭合路径前一个指令则视为上一个指令
+    // 如果没有上一个指令，则判断是否是闭合路径，如果是闭合路径则倒数第二个指令视为上一个指令
     const isClosePath = path[path.length - 1]?.[0] === InstructionType.CLOSE;
     if (isClosePath && !preInstruction) {
       preInstruction = path[path.length - 2];
-      // 如果上一个是直线则再往前取
-      // if (preInstruction && preInstruction[0] === InstructionType.LINE) {
-      //   preInstruction = path[path.length - 3];
-      // }
     }
 
     // 如果有下一个指令且下一个指令是闭合指令，则指向起始指令
@@ -476,60 +472,50 @@ class FabricPathEditor {
 
       const { preHandler, nextHandler } = this.controllers;
 
-      // 绘制上一个控制柄
-      if (preHandler && pre?.point && cur.instruction[0] !== InstructionType.LINE) {
-        console.log(pre)
-        const handleCrood = this._withSourceTransform(pre.point);
+      // 绘制控制柄
+      [
+        {
+          target: preHandler,
+          instruction: pre,
+          hidden: !pre?.point || !cur || cur.instruction[0] === InstructionType.LINE,
+        },
+        {
+          target: nextHandler,
+          instruction: next,
+          hidden: !next?.point || next.instruction[0] === InstructionType.LINE
+        }
+      ].forEach(({ target, instruction, hidden }) => {
+        if (!target) return;
 
-        preHandler.point[PATH_CONTROLLER_INFO].instruction = pre.instruction;
-        preHandler.point[PATH_CONTROLLER_INFO].instructionValueIdx = pre.instructionValueIdx;
+        if (hidden) {
+          this._observe(target.point, () => {});
+          return;
+        }
 
-        this._observe(preHandler.point, (key, value) => {
-          preHandler.line.set({
+        if (!instruction?.point) return;
+
+        const handleCrood = this._withSourceTransform(instruction.point);
+
+        target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
+        target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
+
+        this._observe(target.point, (key, value) => {
+          target.line.set({
             x1: point.left,
             y1: point.top,
-            x2: preHandler.point.left,
-            y2: preHandler.point.top,
+            x2: target.point.left,
+            y2: target.point.top,
           });
 
           if (key === 'left')
-            pre.instruction[pre.instructionValueIdx] = value;
+            instruction.instruction[instruction.instructionValueIdx] = value;
           if (key === 'top')
-            pre.instruction[pre.instructionValueIdx + 1] = value;
+            instruction.instruction[instruction.instructionValueIdx + 1] = value;
         });
 
-        preHandler.point.set(handleCrood);
-
-        canvas.add(preHandler.line, preHandler.point);
-      }
-
-      // 绘制下一个控制柄
-      if (nextHandler && next?.point && next.instruction[0] !== InstructionType.LINE) {
-        const handleCrood = this._withSourceTransform(next.point);
-
-        nextHandler.point[PATH_CONTROLLER_INFO].instruction = next.instruction;
-        nextHandler.point[PATH_CONTROLLER_INFO].instructionValueIdx = next.instructionValueIdx;
-
-        this._observe(nextHandler.point, (key, value) => {
-          nextHandler.line.set({
-            x1: point.left,
-            y1: point.top,
-            x2: nextHandler.point.left,
-            y2: nextHandler.point.top,
-          })
-
-          if (key === 'left') {
-            next.instruction[next.instructionValueIdx] = value;
-          }
-          if (key === 'top') {
-            next.instruction[next.instructionValueIdx + 1] = value;
-          }
-        });
-
-        nextHandler.point.set(handleCrood);
-
-        canvas.add(nextHandler.line, nextHandler.point);
-      }
+        target.point.set(handleCrood);
+        canvas.add(target.line, target.point);
+      })
 
       // console.log(JSON.parse(JSON.stringify(this.target?.path)));
 
