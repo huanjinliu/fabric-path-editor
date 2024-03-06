@@ -1,0 +1,1 @@
+declare type Crood = { x: number, y: number }

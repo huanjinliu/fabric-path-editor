@@ -1,18 +1,113 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Document</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
-  <script>
-    fabric.fabric = fabric;
-  </script>
-</head>
-<body>
-  <script src="./index.js"></script>
-  <script>
-    FabricPathEditor();
-  </script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Document</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <script>
+      fabric.fabric = fabric;
+    </script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      html,
+      body {
+        height: 100%;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="canvas"></canvas>
+    <script src="./index.js"></script>
+    <script>
+      // 创建画布
+      const canvas = document.getElementById("canvas");
+      const fabricCanvas = new fabric.Canvas(canvas, {
+        width: document.body.clientWidth,
+        height: document.body.clientHeight,
+        selection: false,
+      });
+
+      // 创建格子背景
+      const patternSourceCanvas = new fabric.StaticCanvas(null, {
+        width: 20,
+        height: 20,
+      });
+      patternSourceCanvas.add(
+        new fabric.Rect({
+          width: 20,
+          height: 20,
+          fill: "transparent",
+          stroke: "#f1f1f1",
+          strokeWidth: 0.5,
+          strokeDashArray: [4, 2],
+        })
+      );
+      patternSourceCanvas.renderAll();
+      const bg = new fabric.Rect({
+        width: fabricCanvas.getWidth(),
+        height: fabricCanvas.getHeight(),
+        fill: new fabric.Pattern({
+          source: patternSourceCanvas.getElement(),
+          repeat: "repeat",
+        }),
+        objectCaching: false,
+        selectable: false,
+      });
+      fabricCanvas.add(bg);
+
+      // 添加路径
+      // const d = 'M26.7846 -47L109.923 97H-56.3538 z';
+      const d = 'M91 26.5C91 62.1223 62.1223 91 26.5 91S-38 62.1223 -38 26.5S-9.1223 -38 26.5 -38S91 -9.1223 91 26.5';
+      // const d = 'M5 -39c-29.8233 0 -54 24.1767 -54 54c0 22.3749 13.6084 41.5716 33 49.7646V93L16.0001 69H50c29.8233 0 54 -24.1767 54 -54S79.8233 -39 50 -39H5z';
+      const path = new fabric.Path(d, {
+        originX: 'center',
+        originY: 'center',
+        left: fabricCanvas.getWidth() / 2,
+        top: fabricCanvas.getHeight() / 2
+      });
+      path.set({
+        objectCaching: false,
+        noScaleCache: false,
+        fill: "transparent",
+        stroke: '#333',
+        strokeWidth: 2,
+      });
+      // fabricCanvas.add(new fabric.Rect({
+      //   left: 50,
+      //   top: 50,
+      //   width: 100,
+      //   height: 100,
+      //   fill: 'pink'
+      // }));
+      // fabricCanvas.add(path);
+
+      // 添加路径编辑器
+      const editor = new FabricPathEditor(fabricCanvas);
+
+      editor.observe(path);
+      editor.enterEditing();
+      // editor.leaveEditing();
+      // editor.destroy();
+
+      fabricCanvas.renderAll();
+
+      // 添加尺寸更改监听
+      new ResizeObserver(() => {
+        fabricCanvas.setDimensions({
+          width: document.body.clientWidth,
+          height: document.body.clientHeight,
+        });
+        bg.set({
+          width: fabricCanvas.getWidth(),
+          height: fabricCanvas.getHeight(),
+        });
+        fabricCanvas.renderAll();
+      }).observe(document.body);
+    </script>
+  </body>
 </html>

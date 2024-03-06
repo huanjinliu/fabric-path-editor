@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+dependencies:
+  lodash-es:
+    specifier: ^4.17.21
+    version: 4.17.21
+
 devDependencies:
   '@babel/core':
     specifier: ^7.23.9
@@ -32,6 +37,9 @@ devDependencies:
   '@types/fabric':
     specifier: ^5.3.7
     version: 5.3.7
+  '@types/lodash-es':
+    specifier: ^4.17.12
+    version: 4.17.12
   fabric:
     specifier: ^5.3.0
     version: 5.3.0
@@ -604,6 +612,16 @@ packages:
     dependencies:
       '@types/minimatch': 5.1.2
       '@types/node': 20.11.17
+    dev: true
+
+  /@types/lodash-es@4.17.12:
+    resolution: {integrity: sha512-0NgftHUcV4v34VhXm8QBSftKVXtbkBG3ViCjs6+eJ5a6y6Mi/jiFGPc1sC7QK+9BFhWrURE3EOggmWaSxL9OzQ==}
+    dependencies:
+      '@types/lodash': 4.14.202
+    dev: true
+
+  /@types/lodash@4.14.202:
+    resolution: {integrity: sha512-OvlIYQK9tNneDlS0VN54LLd5uiPCBOp7gS5Z0f1mjoJYBrtStzgmJBxONW3U6OZqdtNzZPmn9BS/7WI7BFFcFQ==}
     dev: true
 
   /@types/minimatch@5.1.2:
@@ -1428,6 +1446,10 @@ packages:
       - bufferutil
       - utf-8-validate
     dev: true
+
+  /lodash-es@4.17.21:
+    resolution: {integrity: sha512-mKnC+QJ9pWVzv+C4/U3rRsHapFfHvQFoFB92e52xeyGMcX6/OlIl78je1u8vePzYZSkkogMPJ2yjxxsb89cxyw==}
+    dev: false
 
   /lru-cache@5.1.1:
     resolution: {integrity: sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w==}
