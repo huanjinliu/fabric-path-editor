@@ -97,6 +97,8 @@ class FabricPathEditor {
       point: EditorControlPoint,
       line: fabric.Line,
     }
+    activePoint?: EditorControlPoint,
+    activeHandlerPoint?: EditorControlPoint,
   } = { points: [] };
 
   /**
@@ -115,11 +117,6 @@ class FabricPathEditor {
     canvasSelection: boolean;
     objectSelections: WeakMap<fabric.Object, Boolean>
   } | null = null;
-
-  /**
-   * 当前选中的关键点
-   */
-  _curSelectMajorPoint?: EditorControlPoint;
 
   /**
    * 构造函数，需指定编辑器交互的目标画布
@@ -417,25 +414,6 @@ class FabricPathEditor {
     };
   }
 
-  /**
-   * 找两点之间特定距离的点
-   * 
-   * @example
-   * A <-3->C<--5--> B 如获取AB间，A到B 3个单位距离 的点C的位置
-   * @param startCrood 出发点
-   * @param endCrood 结束点
-   * @param distance 距离，默认中心距离
-   */
-  private _getCroodBetweenTwoCroods(startCrood: Crood, endCrood: Crood, distance?: number) {
-    const dx = endCrood.x - startCrood.x;
-    const dy = endCrood.y - startCrood.y;
-    const totalDistance = Math.sqrt(dy ** 2 + dx ** 2);
-    const ratio = distance ? distance / totalDistance : 1 / 2;
-    return {
-      x: startCrood.x + (dx * ratio),
-      y: startCrood.y + (dy * ratio)
-    }
-  }
 
   /**
    * 将相对坐标点转化为带元素本身变换的偏移位置
@@ -592,6 +570,7 @@ class FabricPathEditor {
       left: {
         get: () => _left,
         set: (value: number) => {
+          if (_left === value) return;
           _left = value;
           const crood = this._invertSourceTransform({ x: _left, y: 0 });
           callback('left', crood.left);
@@ -600,6 +579,7 @@ class FabricPathEditor {
       top: {
         get: () => _top,
         set: (value: number) => {
+          if (_top === value) return;
           _top = value;
           const crood = this._invertSourceTransform({ x: 0, y: _top });
           callback('top', crood.top);
@@ -647,42 +627,13 @@ class FabricPathEditor {
     this.listeners.push({ type, eventName, handler });
   }
 
-  /**
-    * 移除事件监听
-    */
-  private _off(type: 'global' | 'canvas', eventName: string, handler?: (e: any) => void) {
-    let i = 0;
-    while (i < this.listeners.length) {
-      const event = this.listeners[i];
-
-      if (event.eventName !== eventName) {
-        i++;
-        continue;
-      }
-
-      if (handler && event.handler !== handler) {
-        i++;
-        continue;
-      }
-
-      if (type === 'global') {
-        window.removeEventListener(eventName, handler as any);
-      }
-
-      if (type === 'canvas') {
-        this._platform.off(eventName, handler);
-      }
-
-      this.listeners.splice(i, 1);
-    }
-  }
 
   /**
    * 处理画布元素选中和取消选中事件（当前不支持多元素选中）
    */
-  private _handleObjectsSelectEvent = (selectedPoints: EditorControlPoint[], deselectedPoints: EditorControlPoint[]) => {
+  private _handleObjectsSelectEvent = (selectedPoints: EditorControlPoint[]) => {
     const canvas = this._platform;
-    const { preHandler, nextHandler } = this.controllers;
+    const { preHandler, nextHandler, activePoint } = this.controllers;
 
     const point = selectedPoints[0];
 
@@ -692,6 +643,7 @@ class FabricPathEditor {
           // 样式恢复
         }
       });
+      this.controllers.activeHandlerPoint = undefined;
     }
 
     const deselectOldMajorPoint = (point?: EditorControlPoint) => {
@@ -729,15 +681,17 @@ class FabricPathEditor {
       [
         {
           target: preHandler,
+          mirrorTarget: nextHandler,
           instruction: pre,
           hidden: !pre?.point || !cur || cur.instruction[0] === InstructionType.LINE,
         },
         {
           target: nextHandler,
+          mirrorTarget: preHandler,
           instruction: next,
           hidden: !next?.point || next.instruction[0] === InstructionType.LINE
         }
-      ].forEach(({ target, instruction, hidden }) => {
+      ].forEach(({ target, mirrorTarget, instruction, hidden }) => {
         if (!target) return;
 
         if (hidden) {
@@ -746,8 +700,6 @@ class FabricPathEditor {
         }
 
         if (!instruction?.point) return;
-
-        const handleCrood = this._withSourceTransform(instruction.point);
 
         target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
         target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
@@ -760,13 +712,29 @@ class FabricPathEditor {
             y2: target.point.top,
           });
 
-          if (key === 'left')
+          if (key === 'left') {
             instruction.instruction[instruction.instructionValueIdx] = value;
-          if (key === 'top')
+          }
+          if (key === 'top') {
             instruction.instruction[instruction.instructionValueIdx + 1] = value;
+          }
+
+          // 如果有镜像控制柄
+          if (this.controllers.activeHandlerPoint && mirrorTarget) {
+            mirrorTarget.point.set({
+              left: 2 * point.left! - target.point.left!,
+              top: 2 * point.top! - target.point.top!
+            });
+            mirrorTarget.line.set({
+              x1: point.left,
+              y1: point.top,
+              x2: mirrorTarget.point.left,
+              y2: mirrorTarget.point.top,
+            });
+          }
         });
 
-        target.point.set(handleCrood);
+        target.point.set(this._withSourceTransform(instruction.point));
 
         canvas.add(target.line, target.point);
       })
@@ -781,23 +749,24 @@ class FabricPathEditor {
       if (handler) {
         // 样式替换
       }
+      this.controllers.activeHandlerPoint = point;
     }
 
     initHandlersStyle();
 
     if (point) {
       if (point[PATH_CONTROLLER_INFO].type === ControlType.MAJOR_POINT) {
-        deselectOldMajorPoint(this._curSelectMajorPoint);
+        deselectOldMajorPoint(activePoint);
         selectNewMajorPoint(point)
-        this._curSelectMajorPoint = point;
+        this.controllers.activePoint = point;
       }
 
       if (point[PATH_CONTROLLER_INFO].type === ControlType.SUB_POINT) {
         selectSubPoint(point);
       }
     } else {
-      deselectOldMajorPoint(this._curSelectMajorPoint);
-      this._curSelectMajorPoint = undefined;
+      deselectOldMajorPoint(activePoint);
+      this.controllers.activePoint = undefined;
     }
 
     canvas.renderAll();
@@ -874,7 +843,7 @@ class FabricPathEditor {
     this._initPointOperateEvents();
 
     // TODO: 测试使用，默认选中第一个点
-    this._platform.setActiveObject(this.controllers.points[0])
+    this._platform.setActiveObject(this.controllers.points[6])
   }
 
   /**
