@@ -111,6 +111,13 @@ class FabricPathEditor {
   }[] = []
 
   /**
+   * 内置状态
+   */
+  private _inbuiltStatus = {
+    cancelHandlerMirrorMove: false
+  }
+
+  /**
    * 存储画布原始状态
    */
   private _storePlatformStatus: {
@@ -481,40 +488,28 @@ class FabricPathEditor {
       };
 
       // 监听移动修改对应路径信息
-      this._observe(point, (key, value) => {
+      this._observe(point, ({ left, top }) => {
         const { pre } = this._getPointInstructions(point);
         const { preHandler, nextHandler } = this.controllers;
 
-        if (key === 'left') {
-          const dLeft = value - (instruction[instruction.length - 2] as number);
-          if (preHandler) {
-            preHandler.point.set({
-              left: preHandler.point.left! + dLeft,
-            });
-          }
-          if (nextHandler) {
-            nextHandler.point.set({
-              left: nextHandler.point.left! + dLeft,
-            });
-          }
-          instruction[instruction.length - 2] = value;
-          if (instruction[0] === InstructionType.START && pre) pre[pre.length - 2] = value;
+        const dLeft = left - (instruction[instruction.length - 2] as number);
+        const dTop = top - (instruction[instruction.length - 1] as number);
+        if (preHandler) {
+          preHandler.point.set({
+            left: preHandler.point.left! + dLeft,
+            top: preHandler.point.top! + dTop,
+          });
         }
-        if (key === 'top') {
-          const dTop = value - (instruction[instruction.length - 1] as number);
-          if (preHandler) {
-            preHandler.point.set({
-              top: preHandler.point.top! + dTop,
-            });
-          }
-          if (nextHandler) {
-            nextHandler.point.set({
-              top: nextHandler.point.top! + dTop,
-            });
-          }
-          instruction[instruction.length - 1] = value;
-          if (instruction[0] === InstructionType.START && pre) pre[pre.length - 1] = value;
+        if (nextHandler) {
+          nextHandler.point.set({
+            left: nextHandler.point.left! + dLeft,
+            top: nextHandler.point.top! + dTop,
+          });
         }
+        instruction[instruction.length - 2] = left;
+        instruction[instruction.length - 1] = top;
+        if (instruction[0] === InstructionType.START && pre) pre[pre.length - 2] = left;
+        if (instruction[0] === InstructionType.START && pre) pre[pre.length - 1] = top;
       });
 
       // 将目标对象的变换应用到操作点上
@@ -562,7 +557,7 @@ class FabricPathEditor {
   /**
    * 注册响应式，元素移动变换时，联动修改路径信息
    */
-  private _observe(point: EditorControlPoint, callback: (key: 'left' | 'top', value: number) => void) {
+  private _observe(point: EditorControlPoint, callback: (value: { left: number; top: number }, oldValue: { left: number; top: number }) => void) {
     let _left = point.left ?? 0;
     let _top = point.top ?? 0;
 
@@ -571,46 +566,22 @@ class FabricPathEditor {
         get: () => _left,
         set: (value: number) => {
           if (_left === value) return;
+          const oldValue = { x: _left, y: _top };
           _left = value;
-          const crood = this._invertSourceTransform({ x: _left, y: 0 });
-          callback('left', crood.left);
+          callback(this._invertSourceTransform({ x: _left, y: _top }), this._invertSourceTransform(oldValue));
         }
       },
       top: {
         get: () => _top,
         set: (value: number) => {
           if (_top === value) return;
+          const oldValue = { x: _left, y: _top };
           _top = value;
-          const crood = this._invertSourceTransform({ x: 0, y: _top });
-          callback('top', crood.top);
+          callback(this._invertSourceTransform({ x: _left, y: _top }), this._invertSourceTransform(oldValue));
         }
       }
     })
   }
-
-  /**
-   * 处理画布元素移动
-   */
-  // private _handleCanvasObjectMove({ target }: fabric.IEvent<Event>) {
-  //   const controller = (target as EditorControlPoint)[PATH_CONTROLLER_INFO];
-  //   if (!controller) return;
-
-  //   const { type, instruction, instructionValueIdx } = controller;
-  //   if (!instruction || !instructionValueIdx) return;
-
-  //   // const { left = 0, top = 0 } = target as EditorControlPoint;
-
-  //   switch (type) {
-  //     case ControlType.MAJOR_POINT:
-  //     case ControlType.SUB_POINT:
-  //       // const crood = this._invertSourceTransform({ x: left, y: top });
-  //       // instruction[instructionValueIdx] = crood.left;
-  //       // instruction[instructionValueIdx + 1] = crood.top;
-  //       break;
-  //     default:
-  //       break;
-  //   }
-  // }
 
   /**
    * 添加事件监听
@@ -627,11 +598,10 @@ class FabricPathEditor {
     this.listeners.push({ type, eventName, handler });
   }
 
-
   /**
    * 处理画布元素选中和取消选中事件（当前不支持多元素选中）
    */
-  private _handleObjectsSelectEvent = (selectedPoints: EditorControlPoint[]) => {
+  private _handleObjectsSelectEvent = (selectedPoints: EditorControlPoint[], deselectedPoints: EditorControlPoint[]) => {
     const canvas = this._platform;
     const { preHandler, nextHandler, activePoint } = this.controllers;
 
@@ -677,6 +647,8 @@ class FabricPathEditor {
 
       const { preHandler, nextHandler } = this.controllers;
 
+      let isInitialMirror = true;
+
       // 绘制控制柄
       [
         {
@@ -704,7 +676,7 @@ class FabricPathEditor {
         target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
         target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
 
-        this._observe(target.point, (key, value) => {
+        this._observe(target.point, ({ left, top }) => {
           target.line.set({
             x1: point.left,
             y1: point.top,
@@ -712,15 +684,12 @@ class FabricPathEditor {
             y2: target.point.top,
           });
 
-          if (key === 'left') {
-            instruction.instruction[instruction.instructionValueIdx] = value;
-          }
-          if (key === 'top') {
-            instruction.instruction[instruction.instructionValueIdx + 1] = value;
-          }
+          instruction.instruction[instruction.instructionValueIdx] = left;
+          instruction.instruction[instruction.instructionValueIdx + 1] = top;
 
-          // 如果有镜像控制柄
-          if (this.controllers.activeHandlerPoint && mirrorTarget) {
+          // 如果需要镜像控制柄
+          if (this._inbuiltStatus.cancelHandlerMirrorMove) isInitialMirror = false;
+          else if (isInitialMirror && this.controllers.activeHandlerPoint && mirrorTarget) {
             mirrorTarget.point.set({
               left: 2 * point.left! - target.point.left!,
               top: 2 * point.top! - target.point.top!
@@ -739,7 +708,13 @@ class FabricPathEditor {
         canvas.add(target.line, target.point);
       })
 
-      // console.log(JSON.parse(JSON.stringify(this.target?.path)));
+      // 写在后面是因为前面的point还没有赋值位置无法做判断
+      isInitialMirror = (true
+        && preHandler !== undefined
+        && nextHandler !== undefined
+        && (preHandler.point.left! + nextHandler.point.left! === point.left! * 2)
+        && (preHandler.point.top! + nextHandler.point.top! === point.top! * 2)
+      );
 
       canvas.renderAll();
     }
@@ -773,18 +748,86 @@ class FabricPathEditor {
   }
 
   /**
-   * 添加关键点鼠标操作监听事件
+   * 初始化监听事件
    */
-  private _initPointOperateEvents() {
-    this._on('canvas', 'selection:created', (e) => {
-      this._handleObjectsSelectEvent(e.selected, [])
-    })
-    this._on('canvas', 'selection:updated', (e) => {
-      this._handleObjectsSelectEvent(e.selected, e.deselected)
-    })
-    this._on('canvas', 'selection:cleared', (e) => {
-      this._handleObjectsSelectEvent([], e.deselected)
-    })
+  private _initEvents() {
+    // 注册选中事件
+    const registerSelectionEvents = () => {
+      // 节点选中监听事件
+      this._on('canvas', 'selection:created', (e) => {
+        this._handleObjectsSelectEvent(e.selected, [])
+      })
+      this._on('canvas', 'selection:updated', (e) => {
+        this._handleObjectsSelectEvent(e.selected, e.deselected)
+      })
+      this._on('canvas', 'selection:cleared', (e) => {
+        this._handleObjectsSelectEvent([], e.deselected)
+      })
+    }
+
+    // 注册快捷键
+    const registerShortcutEvents = () => {
+      // 快捷键监听
+      let activeShortcut: {
+        key?: string;
+        combinationKeys?: string[];
+        onActivate: () => void;
+        onDeactivate?: () => void;
+      } | undefined;
+      const shortcuts: NonNullable<typeof activeShortcut>[] = [
+        {
+          combinationKeys: ['alt'],
+          onActivate: () => {
+            this._inbuiltStatus.cancelHandlerMirrorMove = true;
+          },
+          onDeactivate: () => {
+            this._inbuiltStatus.cancelHandlerMirrorMove = false;
+          }
+        }
+      ];
+      const deactivate = () => {
+        if (activeShortcut) {
+          activeShortcut.onDeactivate?.();
+          activeShortcut = undefined;
+        }
+      }
+      const handleShortcutKey = (e: KeyboardEvent) => {
+        let _key = e.key.toLowerCase();
+
+        shortcuts.forEach((shortcut) => {
+          const { key, combinationKeys = [] } = shortcut;
+
+          if (!key && combinationKeys.length === 0) return;
+
+          if (e.type === 'keyup') _key = '';
+
+          if (
+            // 没有匹配任何快捷键
+            (key && key !== _key) ||
+            // 没有匹配任何组合键
+            combinationKeys.some(combinationPrefix => !e[`${combinationPrefix}Key`])
+          ) {
+            if (e.type === 'keyup') deactivate();
+            return;
+          }
+
+          if (activeShortcut === shortcut) return;
+
+          activeShortcut?.onDeactivate?.();
+
+          activeShortcut = shortcut;
+
+          activeShortcut?.onActivate();
+        })
+      }
+      this._on('global', 'keydown', handleShortcutKey.bind(this));
+      this._on('global', 'keyup', handleShortcutKey.bind(this));
+      // 需要考虑页面失焦状态，避免状态错误保留
+      this._on('global', 'blur', deactivate);
+    }
+
+    registerSelectionEvents();
+    registerShortcutEvents();
   }
 
   /**
@@ -839,8 +882,8 @@ class FabricPathEditor {
 
     this._platform.renderAll();
 
-    /** 初始路径鼠标操作监听事件 */
-    this._initPointOperateEvents();
+    /** 初始事件监听 */
+    this._initEvents();
 
     // TODO: 测试使用，默认选中第一个点
     this._platform.setActiveObject(this.controllers.points[6])
