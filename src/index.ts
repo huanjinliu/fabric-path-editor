@@ -1,4 +1,5 @@
 import { fabric } from 'fabric';
+import isEqual from 'lodash-es/isEqual';
 import cloneDeep from 'lodash-es/cloneDeep';
 import defaults from 'lodash-es/defaults'
 import round from 'lodash-es/round';
@@ -7,7 +8,7 @@ import { CREATE_DEFAULT_LINE, CREATE_DEFAULT_POINTER, CREATE_DEFAULT_TRIGGER } f
 /** 用于标记路径编辑器元素，便于后续快速查找和辨别元素 */
 const PATH_SYMBOL = Symbol('fabric-path-editor-symbol');
 
-/** 用于记录控制器（包含控制点和控制柄）的信息 */
+/** 用于记录控制器（包含关键点和控制点）的信息 */
 const PATH_CONTROLLER_INFO = Symbol('fabric-path-editor-controller-info');
 
 interface EditorOptions {
@@ -246,7 +247,7 @@ class FabricPathEditor {
 
     const pathList = path.path as unknown as Instruction[];
 
-    // ① 有些路径自身带偏移，如果不消除，后续的所有控制点、控制柄的编辑都要额外处理路径自身的偏移
+    // ① 有些路径自身带偏移，如果不消除，后续的所有关键点、控制点的编辑都要额外处理路径自身的偏移
     FabricPathEditor.transformPath(path, {
       translate: {
         x: -path.pathOffset.x,
@@ -259,7 +260,12 @@ class FabricPathEditor {
     if (isAutoClose) {
       const startPoint = pathList[0].slice(pathList[0].length - 2);
       const endPoint = pathList[pathList.length - 2].slice(pathList[pathList.length - 2].length - 2);
-      if (endPoint[0] !== startPoint[0] || endPoint[1] !== startPoint[1]) {
+      if (
+        // 如果路径只有一个起始点且闭合[M,Z]
+        pathList[0] === pathList[pathList.length - 2]
+        // 或者路径闭合但是最后一个关键点不完全等于起始点
+        || (endPoint[0] !== startPoint[0] || endPoint[1] !== startPoint[1])
+      ) {
         pathList.splice(pathList.length - 1, 0, [InstructionType.LINE, startPoint[0], startPoint[1]] as Instruction);
       }
     }
@@ -300,7 +306,7 @@ class FabricPathEditor {
   }
 
   /**
-   * 通过控制点获取指令信息（cur当前指令、pre上一个指令、next下一个指令）
+   * 通过关键点获取指令信息（cur当前指令、pre上一个指令、next下一个指令）
    */
   private _getPointInstructions(point: EditorControlPoint) {
     const instruction = point[PATH_CONTROLLER_INFO].instruction;
@@ -333,7 +339,14 @@ class FabricPathEditor {
   }
 
   /**
-   * 通过控制点获取前后点位的信息
+   * 通过指令获取其关键点
+   */
+  private _getInstructionPoint(instruction: Instruction) {
+    return this.controllers.points.find(i => i[PATH_CONTROLLER_INFO].instruction === instruction);
+  }
+
+  /**
+   * 通过关键点获取前后点位的信息
    */
   private _getPointAroundPoints(point: EditorControlPoint) {
     const { cur, pre, next } = this._getPointInstructions(point);
@@ -394,7 +407,7 @@ class FabricPathEditor {
           point: { x: cur[3] as number, y: cur[4] as number }
         }
         break;
-      // 闭合指令没有控制点，永远不会触发该case
+      // 闭合指令没有关键点，永远不会触发该case
       case InstructionType.CLOSE:
         break;
       default:
@@ -447,12 +460,16 @@ class FabricPathEditor {
   }
 
   /**
-   * 初始路径控制点
+   * 初始路径关键点
    */
   private _initPathControlPoints() {
     const canvas = this._platform;
     const pathObj = this.target;
     if (!canvas || !pathObj) return;
+
+    // 移除旧的关键点
+    const oldPoints = this.controllers.points;
+    if (oldPoints.length) canvas.remove(...oldPoints);
 
     // 记录新的操作点和控制
     const points: EditorControlPoint[] = [];
@@ -472,7 +489,8 @@ class FabricPathEditor {
       // 关键点的路径位置
       const [x, y] = instruction.slice(instruction.length - 2) as number[];
 
-      const point = new fabric.Group([CREATE_DEFAULT_POINTER()], {
+      // 重用旧节点
+      const point = oldPoints.pop() ?? new fabric.Group([CREATE_DEFAULT_POINTER()], {
         originX: 'center',
         originY: 'center',
         // 选中时不出现选中框
@@ -508,8 +526,13 @@ class FabricPathEditor {
         }
         instruction[instruction.length - 2] = left;
         instruction[instruction.length - 1] = top;
+
+        // 如果是起始点且闭合路径需要同步闭合路径的节点
         if (instruction[0] === InstructionType.START && pre) pre[pre.length - 2] = left;
         if (instruction[0] === InstructionType.START && pre) pre[pre.length - 1] = top;
+
+        // 更新控制区域
+        point.setCoords();
       });
 
       // 将目标对象的变换应用到操作点上
@@ -521,13 +544,13 @@ class FabricPathEditor {
       points.push(point);
     });
 
+    // 添加进画布
     canvas.add(...points);
-
     this.controllers.points = points;
   }
 
   /**
-   * 初始路径控制点变形控制柄
+   * 初始路径变换控制点
    */
   private _initPathControlHandlers() {
     ['pre', 'next'].forEach((type) => {
@@ -599,155 +622,6 @@ class FabricPathEditor {
   }
 
   /**
-   * 处理画布元素选中和取消选中事件（当前不支持多元素选中）
-   */
-  private _handleObjectsSelectEvent = (selectedPoints: EditorControlPoint[], deselectedPoints: EditorControlPoint[]) => {
-    const canvas = this._platform;
-    const { preHandler, nextHandler, activePoint } = this.controllers;
-
-    const point = selectedPoints[0];
-
-    const initHandlersStyle = () => {
-      [preHandler, nextHandler].forEach(handler => {
-        if (handler) {
-          // 样式恢复
-        }
-      });
-      this.controllers.activeHandlerPoint = undefined;
-    }
-
-    const deselectOldMajorPoint = (point?: EditorControlPoint) => {
-      if (!point) return;
-
-      point.item(0).set({
-        fill: '#ffffff'
-      });
-
-      const { preHandler, nextHandler } = this.controllers;
-
-      if (preHandler) {
-        canvas.remove(preHandler.point);
-        canvas.remove(preHandler.line);
-      }
-
-      if (nextHandler) {
-        canvas.remove(nextHandler.point);
-        canvas.remove(nextHandler.line);
-      }
-    }
-
-    const selectNewMajorPoint = (point: EditorControlPoint) => {
-      point.item(0).set({
-        fill: '#29ca6e'
-      });
-
-      const { cur, pre, next } = this._getPointAroundPoints(point);
-
-      // console.log(cur, pre, next);
-
-      const { preHandler, nextHandler } = this.controllers;
-
-      let isInitialMirror = true;
-
-      // 绘制控制柄
-      [
-        {
-          target: preHandler,
-          mirrorTarget: nextHandler,
-          instruction: pre,
-          hidden: !pre?.point || !cur || cur.instruction[0] === InstructionType.LINE,
-        },
-        {
-          target: nextHandler,
-          mirrorTarget: preHandler,
-          instruction: next,
-          hidden: !next?.point || next.instruction[0] === InstructionType.LINE
-        }
-      ].forEach(({ target, mirrorTarget, instruction, hidden }) => {
-        if (!target) return;
-
-        if (hidden) {
-          this._observe(target.point, () => { });
-          return;
-        }
-
-        if (!instruction?.point) return;
-
-        target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
-        target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
-
-        this._observe(target.point, ({ left, top }) => {
-          target.line.set({
-            x1: point.left,
-            y1: point.top,
-            x2: target.point.left,
-            y2: target.point.top,
-          });
-
-          instruction.instruction[instruction.instructionValueIdx] = left;
-          instruction.instruction[instruction.instructionValueIdx + 1] = top;
-
-          // 如果需要镜像控制柄
-          if (this._inbuiltStatus.cancelHandlerMirrorMove) isInitialMirror = false;
-          else if (isInitialMirror && this.controllers.activeHandlerPoint && mirrorTarget) {
-            mirrorTarget.point.set({
-              left: 2 * point.left! - target.point.left!,
-              top: 2 * point.top! - target.point.top!
-            });
-            mirrorTarget.line.set({
-              x1: point.left,
-              y1: point.top,
-              x2: mirrorTarget.point.left,
-              y2: mirrorTarget.point.top,
-            });
-          }
-        });
-
-        target.point.set(this._withSourceTransform(instruction.point));
-
-        canvas.add(target.line, target.point);
-      })
-
-      // 写在后面是因为前面的point还没有赋值位置无法做判断
-      isInitialMirror = (true
-        && preHandler !== undefined
-        && nextHandler !== undefined
-        && (preHandler.point.left! + nextHandler.point.left! === point.left! * 2)
-        && (preHandler.point.top! + nextHandler.point.top! === point.top! * 2)
-      );
-
-      canvas.renderAll();
-    }
-
-    const selectSubPoint = (point: EditorControlPoint) => {
-      const handler = [preHandler, nextHandler].find(i => i?.point === point);
-      if (handler) {
-        // 样式替换
-      }
-      this.controllers.activeHandlerPoint = point;
-    }
-
-    initHandlersStyle();
-
-    if (point) {
-      if (point[PATH_CONTROLLER_INFO].type === ControlType.MAJOR_POINT) {
-        deselectOldMajorPoint(activePoint);
-        selectNewMajorPoint(point)
-        this.controllers.activePoint = point;
-      }
-
-      if (point[PATH_CONTROLLER_INFO].type === ControlType.SUB_POINT) {
-        selectSubPoint(point);
-      }
-    } else {
-      deselectOldMajorPoint(activePoint);
-      this.controllers.activePoint = undefined;
-    }
-
-    canvas.renderAll();
-  }
-
-  /**
    * 初始化监听事件
    */
   private _initEvents() {
@@ -755,13 +629,13 @@ class FabricPathEditor {
     const registerSelectionEvents = () => {
       // 节点选中监听事件
       this._on('canvas', 'selection:created', (e) => {
-        this._handleObjectsSelectEvent(e.selected, [])
+        this.focus(...e.selected);
       })
       this._on('canvas', 'selection:updated', (e) => {
-        this._handleObjectsSelectEvent(e.selected, e.deselected)
+        this.focus(...e.selected);
       })
       this._on('canvas', 'selection:cleared', (e) => {
-        this._handleObjectsSelectEvent([], e.deselected)
+        this.focus();
       })
     }
 
@@ -782,6 +656,12 @@ class FabricPathEditor {
           },
           onDeactivate: () => {
             this._inbuiltStatus.cancelHandlerMirrorMove = false;
+          }
+        },
+        {
+          key: 'backspace',
+          onActivate: () => {
+            this.remove();
           }
         }
       ];
@@ -869,13 +749,13 @@ class FabricPathEditor {
 
     this._platform.add(this.target);
 
-    // 由于需要多次添加控制点和控制柄，如果不设置该配置，每次添加和移除都会渲染一次画布，设置为false后可以控制为1次渲染
+    // 由于需要多次添加关键点和控制点，如果不设置该配置，每次添加和移除都会渲染一次画布，设置为false后可以控制为1次渲染
     this._platform.renderOnAddRemove = false;
 
-    /** 初始路径控制点 */
+    /** 初始路径关键点 */
     this._initPathControlPoints();
 
-    /** 初始路径控制点变形控制柄 */
+    /** 初始路径控制点 */
     this._initPathControlHandlers();
 
     this._platform.renderOnAddRemove = true;
@@ -885,14 +765,247 @@ class FabricPathEditor {
     /** 初始事件监听 */
     this._initEvents();
 
-    // TODO: 测试使用，默认选中第一个点
-    this._platform.setActiveObject(this.controllers.points[6])
+    // TODO: 测试
+    // this.remove(this.controllers.points[2])
   }
 
   /**
    * 离开路径编辑
    */
   leaveEditing() { }
+
+  /**
+   * 处理画布元素选中
+   */
+  focus(...selectedPoints: EditorControlPoint[]) {
+    const canvas = this._platform;
+    const { preHandler, nextHandler, activePoint } = this.controllers;
+
+    const point = selectedPoints[0];
+
+    const initHandlersStyle = () => {
+      [preHandler, nextHandler].forEach(handler => {
+        if (handler) {
+          // 样式恢复
+          handler.point.item(0).set({
+            stroke: '#bebebe'
+          })
+        }
+      });
+      this.controllers.activeHandlerPoint = undefined;
+    }
+
+    const deselectOldMajorPoint = (point?: EditorControlPoint) => {
+      if (!point) return;
+
+      point.item(0).set({
+        fill: '#ffffff'
+      });
+
+      const { preHandler, nextHandler } = this.controllers;
+
+      if (preHandler) {
+        canvas.remove(preHandler.point);
+        canvas.remove(preHandler.line);
+      }
+
+      if (nextHandler) {
+        canvas.remove(nextHandler.point);
+        canvas.remove(nextHandler.line);
+      }
+    }
+
+    const selectNewMajorPoint = (point: EditorControlPoint) => {
+      point.item(0).set({
+        fill: '#29ca6e'
+      });
+
+      const { cur, pre, next } = this._getPointAroundPoints(point);
+
+      // console.log(cur, pre, next);
+
+      const { preHandler, nextHandler } = this.controllers;
+
+      let isInitialMirror = true;
+
+      // 绘制控制点
+      [
+        {
+          target: preHandler,
+          mirrorTarget: nextHandler,
+          instruction: pre,
+          hidden: !pre?.point || !cur || cur.instruction[0] === InstructionType.LINE,
+        },
+        {
+          target: nextHandler,
+          mirrorTarget: preHandler,
+          instruction: next,
+          hidden: !next?.point || next.instruction[0] === InstructionType.LINE
+        }
+      ].forEach(({ target, mirrorTarget, instruction, hidden }) => {
+        if (!target) return;
+
+        if (hidden) {
+          this._observe(target.point, () => { });
+          return;
+        }
+
+        if (!instruction?.point) return;
+
+        target.point[PATH_CONTROLLER_INFO].instruction = instruction.instruction;
+        target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
+
+        this._observe(target.point, ({ left, top }) => {
+          target.line.set({
+            x1: point.left,
+            y1: point.top,
+            x2: target.point.left,
+            y2: target.point.top,
+          });
+
+          instruction.instruction[instruction.instructionValueIdx] = left;
+          instruction.instruction[instruction.instructionValueIdx + 1] = top;
+
+          // 如果需要镜像控制点
+          if (this._inbuiltStatus.cancelHandlerMirrorMove) isInitialMirror = false;
+          else if (isInitialMirror && this.controllers.activeHandlerPoint && mirrorTarget) {
+            mirrorTarget.point.set({
+              left: 2 * point.left! - target.point.left!,
+              top: 2 * point.top! - target.point.top!
+            });
+            mirrorTarget.line.set({
+              x1: point.left,
+              y1: point.top,
+              x2: mirrorTarget.point.left,
+              y2: mirrorTarget.point.top,
+            });
+          }
+
+          // 更新对象的控制框区域，避免后续无法选中
+          target.point.setCoords();
+        });
+
+        target.point.set(this._withSourceTransform(instruction.point));
+
+        canvas.add(target.line, target.point);
+      })
+
+      // 写在后面是因为前面的point还没有赋值位置无法做判断
+      isInitialMirror = (true
+        && preHandler !== undefined
+        && nextHandler !== undefined
+        && (preHandler.point.left! + nextHandler.point.left! === point.left! * 2)
+        && (preHandler.point.top! + nextHandler.point.top! === point.top! * 2)
+      );
+
+      canvas.renderAll();
+    }
+
+    const selectSubPoint = (point: EditorControlPoint) => {
+      const handler = [preHandler, nextHandler].find(i => i?.point === point);
+      if (handler) {
+        // 样式替换
+        handler.point.item(0).set({
+          stroke: '#4b4b4b'
+        })
+      }
+      this.controllers.activeHandlerPoint = point;
+    }
+
+    initHandlersStyle();
+
+    if (point) {
+      if (point[PATH_CONTROLLER_INFO].type === ControlType.MAJOR_POINT) {
+        deselectOldMajorPoint(activePoint);
+        selectNewMajorPoint(point)
+        this.controllers.activePoint = point;
+      }
+      if (point[PATH_CONTROLLER_INFO].type === ControlType.SUB_POINT) {
+        selectSubPoint(point);
+      }
+      canvas.setActiveObject(point);
+    } else {
+      deselectOldMajorPoint(activePoint);
+      this.controllers.activePoint = undefined;
+      canvas.discardActiveObject();
+    }
+
+    canvas.renderAll();
+  }
+
+  /**
+   * 删除节点
+   */
+  remove(point = this.controllers.activeHandlerPoint ?? this.controllers.activePoint) {
+    if (!point || !this.target) return;
+
+    const canvas = this._platform;
+
+    const path = this.target.path as unknown as Instruction[];
+    if (!path) return;
+
+    const { type, instruction } = point[PATH_CONTROLLER_INFO];
+    if (!instruction) return;
+
+    switch (type) {
+      // 如果是关键点直接删除当前关键点，并且拆分路径，下一条指令的关键点变为起始点，上一条指令变为结束点了，如果是自动闭合调整为非闭合状态
+      case ControlType.MAJOR_POINT: {
+        const index = path.indexOf(instruction);
+        const newPath = cloneDeep(path);
+
+        // ① 拼接旧的起始点
+        const preInstructions = newPath.splice(0, index + 1);
+        // 移除当前的指令
+        preInstructions.pop();
+        // 如果第一个是起始点，直接移除
+        if (newPath.length && preInstructions[0]?.[0] === InstructionType.START) preInstructions.shift();
+        // 删除了关键点已经不可能是闭合路径了
+        if (newPath[newPath.length - 1]?.[0] === InstructionType.CLOSE) newPath.pop();
+        newPath.push(...preInstructions);
+
+        // 特殊情况：如果当前指令是开始指令并且路径闭合，需要删除最后关键点与起始点一致的
+        const lastInstruction = newPath[newPath.length - 1];
+        if (
+          instruction[0] === InstructionType.START
+          && lastInstruction
+          && isEqual(lastInstruction.slice(lastInstruction.length - 2), instruction.slice(1))
+        ) {
+          newPath.pop();
+        }
+
+        // ② 重构起始点
+        const newStartPoint = newPath[0];
+        if (newStartPoint) {
+          newStartPoint.splice(1, {
+            [InstructionType.START]: 0,
+            [InstructionType.LINE]: 0,
+            [InstructionType.BEZIER_CURVE]: 4,
+            [InstructionType.QUADRATIC_CURCE]: 2
+          }[newStartPoint[0]]);
+          newStartPoint[0] = InstructionType.START;
+        }
+
+        this.target.path = newPath as any;
+
+        this._initPathControlPoints();
+        break;
+      }
+      // 只有曲线指令才有控制点，删除控制点将直接降级成直线指令
+      case ControlType.SUB_POINT:
+        instruction.splice(1, {
+          [InstructionType.BEZIER_CURVE]: 4,
+          [InstructionType.QUADRATIC_CURCE]: 2
+        }[instruction[0]]);
+        instruction[0] = InstructionType.LINE;
+        this.focus(this.controllers.activePoint!);
+        break;
+      default:
+        break;
+    }
+
+    canvas.requestRenderAll();
+  }
+
 
   /**
    * 销毁编辑器

@@ -30,7 +30,9 @@ export const CREATE_DEFAULT_LINE = () =>
 /** 创建默认默认左右侧拓展点 */
 export const CREATE_DEFAULT_TRIGGER = () => {
   const object = new fabric.Circle({
-    radius: 5,
+    radius: 4,
+    stroke: '#bebebe',
+    strokeWidth: 2,
     fill: '#bebebe',
     originX: 'center',
     originY: 'center'
