@@ -245,9 +245,8 @@ class FabricPathEditor {
   private _patchPath(path: fabric.Path) {
     if (!path.path) return;
 
-    const pathList = path.path as unknown as Instruction[];
 
-    // ① 有些路径自身带偏移，如果不消除，后续的所有关键点、控制点的编辑都要额外处理路径自身的偏移
+    // ① 清除路径自带偏移，如果不消除，后续的所有关键点、控制点的编辑都要额外处理路径自身的偏移
     FabricPathEditor.transformPath(path, {
       translate: {
         x: -path.pathOffset.x,
@@ -256,26 +255,24 @@ class FabricPathEditor {
     });
 
     // ② 闭合的路径如果在闭合指令前没有回到起始点，补充一条回到起始点的指令
-    const isAutoClose = pathList[pathList.length - 1][0] === InstructionType.CLOSE;
-    if (isAutoClose) {
-      const startPoint = pathList[0].slice(pathList[0].length - 2);
-      const endPoint = pathList[pathList.length - 2].slice(pathList[pathList.length - 2].length - 2);
-      if (
-        // 如果路径只有一个起始点且闭合[M,Z]
-        pathList[0] === pathList[pathList.length - 2]
-        // 或者路径闭合但是最后一个关键点不完全等于起始点
-        || (endPoint[0] !== startPoint[0] || endPoint[1] !== startPoint[1])
-      ) {
-        pathList.splice(pathList.length - 1, 0, [InstructionType.LINE, startPoint[0], startPoint[1]] as Instruction);
+    const itemPaths = this._splitPath(path.path as unknown as Instruction[]);
+    for(const itemPath of itemPaths) {
+      const isAutoClose = itemPath[itemPath.length - 1][0] === InstructionType.CLOSE;
+      if (isAutoClose) {
+        const startPoint = itemPath[0].slice(itemPath[0].length - 2);
+        const endPoint = itemPath[itemPath.length - 2].slice(itemPath[itemPath.length - 2].length - 2);
+        if (
+          // 如果路径只有一个起始点且闭合[M,Z]
+          itemPath[0] === itemPath[itemPath.length - 2]
+          // 或者路径闭合但是最后一个关键点不完全等于起始点
+          || (endPoint[0] !== startPoint[0] || endPoint[1] !== startPoint[1])
+        ) {
+          itemPath.splice(itemPath.length - 1, 0, [InstructionType.LINE, startPoint[0], startPoint[1]] as Instruction);
+        }
       }
     }
 
-    // if (this.target !== this.target) {
-    //   this.target.set({
-    //     left: this.target.left! - this.target.pathOffset.x,
-    //     top: this.target.top! - this.target.pathOffset.y
-    //   });
-    // }
+    path.path = itemPaths.flat(1) as unknown as fabric.Point[];
     path.pathOffset = new fabric.Point(0, 0);
   }
 
@@ -306,32 +303,51 @@ class FabricPathEditor {
   }
 
   /**
+   * 拆分路径段
+   */
+  private _splitPath(path: Instruction[]) {
+    const splitPaths = path.reduce((paths, instruction, idx, arr) => {
+      if (!instruction) return paths;
+      if (instruction[0] === InstructionType.START && paths[paths.length - 1].length) paths.push([]);
+      paths[paths.length - 1].push(instruction);
+      if (instruction[0] === InstructionType.CLOSE && idx !== arr.length - 1) paths.push([]);
+      return paths;
+    }, [[]] as (typeof path)[]);
+    return splitPaths;
+  }
+
+  /**
    * 通过关键点获取指令信息（cur当前指令、pre上一个指令、next下一个指令）
    */
   private _getPointInstructions(point: EditorControlPoint) {
-    const instruction = point[PATH_CONTROLLER_INFO].instruction;
+    const instruction = point[PATH_CONTROLLER_INFO].instruction!;
 
-    const path = this.target?.path as unknown as (typeof instruction)[];
-    if (!path) return { cur: null, next: null, pre: null };
+    const path = this.target?.path;
+    if (!path) return { path: [], cur: null, next: null, pre: null };
+
+    // 提取路径段
+    const splitPaths = this._splitPath(path as unknown as Instruction[]);
+    const _path = splitPaths.find(path => path.includes(instruction))!;
 
     // 获取前后指令
-    const instructionIdx = path.indexOf(instruction);
+    const instructionIdx = _path.indexOf(instruction);
 
-    let preInstruction = path[instructionIdx - 1];
-    let nextInstruction = path[instructionIdx + 1];
+    let preInstruction = _path[instructionIdx - 1];
+    let nextInstruction = _path[instructionIdx + 1];
 
     // 如果没有上一个指令，则判断是否是闭合路径，如果是闭合路径则倒数第二个指令视为上一个指令
-    const isClosePath = path[path.length - 1]?.[0] === InstructionType.CLOSE;
+    const isClosePath = _path[_path.length - 1]?.[0] === InstructionType.CLOSE;
     if (isClosePath && !preInstruction) {
-      preInstruction = path[path.length - 2];
+      preInstruction = _path[_path.length - 2];
     }
 
     // 如果有下一个指令且下一个指令是闭合指令，则指向起始指令
     if (nextInstruction && nextInstruction[0] === InstructionType.CLOSE) {
-      nextInstruction = path[0];
+      nextInstruction = _path[0];
     }
 
     return {
+      path: _path,
       cur: instruction,
       pre: preInstruction ?? null,
       next: nextInstruction ?? null,
@@ -438,7 +454,7 @@ class FabricPathEditor {
   /**
    * 将相对坐标点转化为带元素本身变换的偏移位置
    */
-  private _withSourceTransform(crood: Crood) {
+  private _calcAbsolutePosition(crood: Crood): Position {
     const _point = fabric.util.transformPoint(
       new fabric.Point(crood.x, crood.y),
       this.source!.calcOwnMatrix()
@@ -448,15 +464,15 @@ class FabricPathEditor {
   }
 
   /**
-   * 移除元素本身变换
+   * 移除元素本身变换，将实际偏移转化为路径相对坐标
    */
-  private _invertSourceTransform(crood: Crood) {
+  private _calcRelativeCrood(position: Position): Crood {
     const _point = fabric.util.transformPoint(
-      new fabric.Point(crood.x, crood.y),
+      new fabric.Point(position.left, position.top),
       fabric.util.invertTransform(this.source!.calcOwnMatrix())
     );
 
-    return { left: _point.x, top: _point.y };
+    return _point;
   }
 
   /**
@@ -474,74 +490,90 @@ class FabricPathEditor {
     // 记录新的操作点和控制
     const points: EditorControlPoint[] = [];
 
-    const path = pathObj.path as unknown as Instruction[];
-
     // 创建路径关键点的操作点（即实际路径上的节点，而非曲线上的虚拟点）
-    path?.forEach((item, pathIdx) => {
-      const instruction = item;
+    this._splitPath(pathObj.path as unknown as Instruction[])?.forEach((path) => {
 
-      // 闭合点不添加关键点
-      if (instruction[0] === InstructionType.CLOSE) return;
+      const firstInstruction = path[0];
 
-      // 如果下一个指令是闭合点，且当前关键点正好和起始点一致，则不添加关键点
-      if (path[pathIdx + 1]?.[0] === InstructionType.CLOSE) return;
+      path.forEach((item, index) => {
+        const instruction = item;
 
-      // 关键点的路径位置
-      const [x, y] = instruction.slice(instruction.length - 2) as number[];
+        // 闭合点不添加关键点
+        if (instruction[0] === InstructionType.CLOSE) return;
 
-      // 重用旧节点
-      const point = oldPoints.pop() ?? new fabric.Group([CREATE_DEFAULT_POINTER()], {
-        originX: 'center',
-        originY: 'center',
-        // 选中时不出现选中框
-        hasBorders: false,
-        hasControls: false
-      }) as EditorControlPoint;
+        // 如果下一个指令是闭合点，则不添加关键点
+        // 因为路径补丁的时候遇到闭合点会添加一条到起始点的路径，所以当前关键点正好和起始点一致
+        if (path[index + 1]?.[0] === InstructionType.CLOSE) return;
 
-      point[PATH_SYMBOL] = true;
-      point[PATH_CONTROLLER_INFO] = {
-        type: ControlType.MAJOR_POINT,
-        instruction,
-        instructionValueIdx: instruction.length - 2
-      };
+        // 关键点的路径位置
+        const [x, y] = instruction.slice(instruction.length - 2) as number[];
 
-      // 监听移动修改对应路径信息
-      this._observe(point, ({ left, top }) => {
-        const { pre } = this._getPointInstructions(point);
-        const { preHandler, nextHandler } = this.controllers;
+        // 重用旧节点
+        const point = oldPoints.pop() ?? new fabric.Group([CREATE_DEFAULT_POINTER()], {
+          originX: 'center',
+          originY: 'center',
+          // 选中时不出现选中框
+          hasBorders: false,
+          hasControls: false
+        }) as EditorControlPoint;
 
-        const dLeft = left - (instruction[instruction.length - 2] as number);
-        const dTop = top - (instruction[instruction.length - 1] as number);
-        if (preHandler) {
-          preHandler.point.set({
-            left: preHandler.point.left! + dLeft,
-            top: preHandler.point.top! + dTop,
-          });
-        }
-        if (nextHandler) {
-          nextHandler.point.set({
-            left: nextHandler.point.left! + dLeft,
-            top: nextHandler.point.top! + dTop,
-          });
-        }
-        instruction[instruction.length - 2] = left;
-        instruction[instruction.length - 1] = top;
+        point[PATH_SYMBOL] = true;
+        point[PATH_CONTROLLER_INFO] = {
+          type: ControlType.MAJOR_POINT,
+          instruction,
+          instructionValueIdx: instruction.length - 2
+        };
 
-        // 如果是起始点且闭合路径需要同步闭合路径的节点
-        if (instruction[0] === InstructionType.START && pre) pre[pre.length - 2] = left;
-        if (instruction[0] === InstructionType.START && pre) pre[pre.length - 1] = top;
+        // 监听移动修改对应路径信息
+        this._observe(point, ({ left, top }, oldPosition) => {
+          const newCrood = this._calcRelativeCrood({ left, top });
+          const oldCrood = this._calcRelativeCrood(oldPosition);
 
-        // 更新控制区域
-        point.setCoords();
-      });
+          const { path } = this._getPointInstructions(point);
+          const { preHandler, nextHandler } = this.controllers;
 
-      // 将目标对象的变换应用到操作点上
-      point.set(this._withSourceTransform({ x, y }));
+          const dLeft = newCrood.x - (instruction[instruction.length - 2] as number);
+          const dTop = newCrood.y - (instruction[instruction.length - 1] as number);
+          if (preHandler) {
+            preHandler.point.set({
+              left: preHandler.point.left! + dLeft,
+              top: preHandler.point.top! + dTop,
+            });
+          }
+          if (nextHandler) {
+            nextHandler.point.set({
+              left: nextHandler.point.left! + dLeft,
+              top: nextHandler.point.top! + dTop,
+            });
+          }
+          instruction[instruction.length - 2] = newCrood.x;
+          instruction[instruction.length - 1] = newCrood.y;
 
-      // 添加控制点事件——改用canvas全局代理来选中节点
-      // this._addControlPointEvents(point);
+          // 如果是路径段起始点且路径闭合需要同步最后一致指令节点
+          const syncInstruction = path[path.length - 2];
+          if (
+            syncInstruction
+            && instruction !== syncInstruction
+            && syncInstruction[0] !== InstructionType.CLOSE
+            && path[0] === instruction
+            && path[path.length - 1][0] === InstructionType.CLOSE
+          ) {
+            syncInstruction[syncInstruction.length - 2] = newCrood.x;
+            syncInstruction[syncInstruction.length - 1] = newCrood.y;
+          }
 
-      points.push(point);
+          // 更新控制区域
+          point.setCoords();
+        });
+
+        // 将目标对象的变换应用到操作点上
+        point.set(this._calcAbsolutePosition({ x, y }));
+
+        // 添加控制点事件——改用canvas全局代理来选中节点
+        // this._addControlPointEvents(point);
+
+        points.push(point);
+      })
     });
 
     // 添加进画布
@@ -581,26 +613,25 @@ class FabricPathEditor {
    * 注册响应式，元素移动变换时，联动修改路径信息
    */
   private _observe(point: EditorControlPoint, callback: (value: { left: number; top: number }, oldValue: { left: number; top: number }) => void) {
-    let _left = point.left ?? 0;
-    let _top = point.top ?? 0;
+    let { left = 0, top = 0 } = point;
 
     Object.defineProperties(point, {
       left: {
-        get: () => _left,
+        get: () => left,
         set: (value: number) => {
-          if (_left === value) return;
-          const oldValue = { x: _left, y: _top };
-          _left = value;
-          callback(this._invertSourceTransform({ x: _left, y: _top }), this._invertSourceTransform(oldValue));
+          if (left === value) return;
+          const oldValue = { left, top };
+          left = value;
+          callback({ left, top }, oldValue);
         }
       },
       top: {
-        get: () => _top,
+        get: () => top,
         set: (value: number) => {
-          if (_top === value) return;
-          const oldValue = { x: _left, y: _top };
-          _top = value;
-          callback(this._invertSourceTransform({ x: _left, y: _top }), this._invertSourceTransform(oldValue));
+          if (top === value) return;
+          const oldValue = { left, top };
+          top = value;
+          callback({ left, top }, oldValue);
         }
       }
     })
@@ -634,7 +665,7 @@ class FabricPathEditor {
       this._on('canvas', 'selection:updated', (e) => {
         this.focus(...e.selected);
       })
-      this._on('canvas', 'selection:cleared', (e) => {
+      this._on('canvas', 'selection:cleared', () => {
         this.focus();
       })
     }
@@ -822,8 +853,6 @@ class FabricPathEditor {
 
       const { cur, pre, next } = this._getPointAroundPoints(point);
 
-      // console.log(cur, pre, next);
-
       const { preHandler, nextHandler } = this.controllers;
 
       let isInitialMirror = true;
@@ -856,6 +885,8 @@ class FabricPathEditor {
         target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instruction.instructionValueIdx;
 
         this._observe(target.point, ({ left, top }) => {
+          const { x, y } = this._calcRelativeCrood({ left, top });
+
           target.line.set({
             x1: point.left,
             y1: point.top,
@@ -863,8 +894,8 @@ class FabricPathEditor {
             y2: target.point.top,
           });
 
-          instruction.instruction[instruction.instructionValueIdx] = left;
-          instruction.instruction[instruction.instructionValueIdx + 1] = top;
+          instruction.instruction[instruction.instructionValueIdx] = x;
+          instruction.instruction[instruction.instructionValueIdx + 1] = y;
 
           // 如果需要镜像控制点
           if (this._inbuiltStatus.cancelHandlerMirrorMove) isInitialMirror = false;
@@ -885,7 +916,7 @@ class FabricPathEditor {
           target.point.setCoords();
         });
 
-        target.point.set(this._withSourceTransform(instruction.point));
+        target.point.set(this._calcAbsolutePosition(instruction.point));
 
         canvas.add(target.line, target.point);
       })
@@ -950,31 +981,45 @@ class FabricPathEditor {
     switch (type) {
       // 如果是关键点直接删除当前关键点，并且拆分路径，下一条指令的关键点变为起始点，上一条指令变为结束点了，如果是自动闭合调整为非闭合状态
       case ControlType.MAJOR_POINT: {
-        const index = path.indexOf(instruction);
-        const newPath = cloneDeep(path);
+        const splitPaths = this._splitPath(path);
+        const splitPathIdx = splitPaths.findIndex(i => i.includes(instruction))!;
 
-        // ① 拼接旧的起始点
-        const preInstructions = newPath.splice(0, index + 1);
-        // 移除当前的指令
-        preInstructions.pop();
-        // 如果第一个是起始点，直接移除
-        if (newPath.length && preInstructions[0]?.[0] === InstructionType.START) preInstructions.shift();
-        // 删除了关键点已经不可能是闭合路径了
-        if (newPath[newPath.length - 1]?.[0] === InstructionType.CLOSE) newPath.pop();
-        newPath.push(...preInstructions);
+        const instructionIdx = splitPaths[splitPathIdx].indexOf(instruction);
+        const splitPath = cloneDeep(splitPaths[splitPathIdx]);
 
-        // 特殊情况：如果当前指令是开始指令并且路径闭合，需要删除最后关键点与起始点一致的
-        const lastInstruction = newPath[newPath.length - 1];
-        if (
-          instruction[0] === InstructionType.START
-          && lastInstruction
-          && isEqual(lastInstruction.slice(lastInstruction.length - 2), instruction.slice(1))
-        ) {
-          newPath.pop();
+        // ① 拆分路径
+        const pre = splitPath.slice(0, instructionIdx);
+        const next = splitPath.slice(instructionIdx + 1);
+
+        // ② 如果原本是闭合路径需要合并路径，但是要修改起始点
+        if (next[next.length - 1]?.[0] === InstructionType.CLOSE) {
+          next.pop();
+
+          // 特殊情况：如果当前指令是开始指令并且路径闭合，需要删除最后关键点与起始点一致的
+          const lastInstruction = next[next.length - 1];
+          if (
+            instructionIdx === 0
+            && lastInstruction
+            && isEqual(lastInstruction.slice(lastInstruction.length - 2), instruction.slice(instruction.length - 2))
+          ) {
+            next.pop();
+          } else {
+            const firstInstruction = pre[0];
+            if (firstInstruction?.[0] === InstructionType.START) {
+              firstInstruction[0] = InstructionType.LINE;
+              if (isEqual(firstInstruction.slice(firstInstruction.length - 2), lastInstruction.slice(lastInstruction.length - 2))) {
+                pre.shift();
+              }
+            }
+          }
+          next.push(...pre);
+          splitPaths.splice(splitPathIdx, 1, next);
+        } else {
+          splitPaths.splice(splitPathIdx, 1, pre, next);
         }
 
-        // ② 重构起始点
-        const newStartPoint = newPath[0];
+        // ③ 重构起始点
+        const newStartPoint = next[0];
         if (newStartPoint) {
           newStartPoint.splice(1, {
             [InstructionType.START]: 0,
@@ -985,7 +1030,7 @@ class FabricPathEditor {
           newStartPoint[0] = InstructionType.START;
         }
 
-        this.target.path = newPath as any;
+        this.target.path = splitPaths.flat(1) as any;
 
         this._initPathControlPoints();
         break;
@@ -1010,7 +1055,7 @@ class FabricPathEditor {
   /**
    * 销毁编辑器
    */
-  destory() { }
+  destroy() { }
 }
 
 export default FabricPathEditor;
