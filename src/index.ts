@@ -1298,13 +1298,17 @@ class FabricPathEditor {
     if (!instruction) return;
 
     switch (type) {
-      // 如果是关键点直接删除当前关键点，并且拆分路径，下一条指令的关键点变为起始点，上一条指令变为结束点了，如果是自动闭合调整为非闭合状态
+      /**
+       * 如果是中间点将当前指令变为起始指令，否则直接删除当前关键点，
+       * 并且拆分路径，下一条指令的关键点变为起始点，上一条指令变为结束点了，如果是自动闭合调整为非闭合状态
+       */
       case ControlType.MAJOR_POINT: {
         const itemPaths = this._splitPath(path);
+
         const splitPathIdx = itemPaths.findIndex(i => i.includes(instruction))!;
+        const splitPath = cloneDeep(itemPaths[splitPathIdx]);
 
         const instructionIdx = itemPaths[splitPathIdx].indexOf(instruction);
-        const splitPath = cloneDeep(itemPaths[splitPathIdx]);
 
         // ① 拆分路径
         const pre = splitPath.slice(0, instructionIdx);
@@ -1335,6 +1339,11 @@ class FabricPathEditor {
           itemPaths.splice(splitPathIdx, 1, next);
         } else {
           itemPaths.splice(splitPathIdx, 1, pre, next);
+        }
+
+        // 如果是中间点需要将关键点做为新的路径起始点
+        if (instruction[0] !== InstructionType.START) {
+          next.unshift(cloneDeep(instruction));
         }
 
         // ③ 重构起始点
