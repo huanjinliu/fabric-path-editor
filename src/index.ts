@@ -132,7 +132,16 @@ class FabricPathEditor {
    * 内置状态
    */
   private _inbuiltStatus = {
-    cancelHandlerMirrorMove: false
+    /**
+     * 是否取消 handler 镜像移动
+     * @default false
+     */
+    cancelHandlerMirrorMove: false,
+    /**
+     * 是否路径端点接触合并
+     * @default false
+     */
+    autoPathMerge: false,
   }
 
   /**
@@ -294,6 +303,14 @@ class FabricPathEditor {
     // ② 闭合的路径如果在闭合指令前没有回到起始点，补充一条回到起始点的指令
     const itemPaths = this._splitPath(path.path as unknown as Instruction[]);
     for (const itemPath of itemPaths) {
+      // 修正头指令，头指令必须是M开始指令，其他的也没效果
+      if (itemPath[0][0] !== InstructionType.START) {
+        itemPath[0] = [
+          InstructionType.START,
+          ...itemPath[0].slice(itemPath[0].length - 2)
+        ] as Instruction;
+      }
+
       const isAutoClose = itemPath[itemPath.length - 1][0] === InstructionType.CLOSE;
       if (isAutoClose) {
         const startPoint = itemPath[0].slice(itemPath[0].length - 2);
@@ -309,7 +326,9 @@ class FabricPathEditor {
       }
     }
 
-    path.path = itemPaths.flat(1) as unknown as fabric.Point[];
+    const _itemPaths = itemPaths.map(path => this._invertPath(path));
+
+    path.path = _itemPaths.flat(1) as unknown as fabric.Point[];
     path.pathOffset = new fabric.Point(0, 0);
   }
 
@@ -668,6 +687,114 @@ class FabricPathEditor {
   }
 
   /**
+   * 反转路径
+   */
+  private _invertPath(path: Instruction[]) {
+    const _path: Instruction[] = [];
+
+    let isClosePath = false;
+
+    for (let i = path.length - 1; i >= 0; i--) {
+      const instruction = path[i];
+
+      if (i === path.length - 1) {
+        _path.push([InstructionType.START, ...instruction.slice(instruction.length - 2)] as Instruction);
+      }
+      if (i === 0) break;
+
+      const preInstruction = path[i - 1];
+      const preMajorPointCrood = preInstruction.slice(preInstruction.length - 2) as number[];
+
+      switch (instruction[0]) {
+        case InstructionType.START:
+          if (isClosePath) _path.push([InstructionType.CLOSE])
+          break;
+        case InstructionType.LINE:
+          _path.push([InstructionType.LINE, ...preMajorPointCrood]);
+          break;
+        case InstructionType.QUADRATIC_CURCE:
+          _path.push([
+            InstructionType.QUADRATIC_CURCE,
+            instruction[1],
+            instruction[2],
+            ...preMajorPointCrood
+          ]);
+          break;
+        case InstructionType.BEZIER_CURVE:
+          _path.push([
+            InstructionType.BEZIER_CURVE,
+            instruction[3],
+            instruction[4],
+            instruction[1],
+            instruction[2],
+            ...preMajorPointCrood
+          ]);
+          break;
+        case InstructionType.CLOSE:
+          isClosePath = true;
+          break;
+        defaults:
+          break;
+      }
+    }
+
+    return _path;
+  }
+
+  /**
+   * 合并路径
+   */
+  private _mergePath(sourcePoint: EditorControlPoint, targetPoint: EditorControlPoint) {
+    const path = this.target!.path!;
+
+    // 获取全路径段
+    const itemPaths = this._splitPath(path as unknown as Instruction[]);
+  
+    // 提取原路径和目标路径
+    const sourceInfo = sourcePoint[PATH_CONTROLLER_INFO];
+    const targetInfo = targetPoint[PATH_CONTROLLER_INFO];
+
+    let sourcePath: Instruction[] | undefined;
+    let targetPath: Instruction[] | undefined;
+    let mergePath: Instruction[] | undefined;
+
+    for (let i = 0; i < itemPaths.length;) {
+      const itemPath = itemPaths[i];
+      if (sourcePath && targetPath) break;
+      if (itemPath.includes(sourceInfo.instruction!)) sourcePath = itemPath;
+      if (itemPath.includes(targetInfo.instruction!)) targetPath = itemPath;
+      if (itemPath === sourcePath || itemPath === targetPath) {
+        itemPaths.splice(i, 1);
+        continue;
+      }
+      i++;
+    }
+    if (sourcePath === undefined || targetPath === undefined) return;
+
+    // 自身合并，直接加'z'闭合指令即可
+    if (sourcePath === targetPath) {
+      sourcePath.push([InstructionType.CLOSE]);
+      mergePath = sourcePath;
+    }
+    // 不同路径需要进行合并
+    else {
+      if (sourceInfo.instruction === sourcePath[0]) {
+        sourcePath = this._invertPath(sourcePath);
+      }
+      if (targetInfo.instruction === targetPath[targetPath.length - 1]) {
+        targetPath = this._invertPath(targetPath);
+      }
+      targetPath.shift();
+      mergePath = sourcePath.concat(targetPath);
+    }
+
+    // 合并后添加回路径段集合
+    itemPaths.push(mergePath);
+    this.target!.path = itemPaths.flat(1) as any;
+    this._initPathControlPoints();
+  }
+
+  /**
    * 注册响应式，元素移动变换时，联动修改路径信息
    */
   private _observe(point: EditorControlPoint, callback: (value: { left: number; top: number }, oldValue: { left: number; top: number }) => void) {
@@ -744,6 +871,15 @@ class FabricPathEditor {
           },
           onDeactivate: () => {
             this._inbuiltStatus.cancelHandlerMirrorMove = false;
+          }
+        },
+        {
+          combinationKeys: ['ctrl'],
+          onActivate: () => {
+            this._inbuiltStatus.autoPathMerge = true;
+          },
+          onDeactivate: () => {
+            this._inbuiltStatus.autoPathMerge = false;
           }
         },
         {
@@ -827,9 +963,59 @@ class FabricPathEditor {
       });
     }
 
+    // 注册画布路径合并事件
+    const registerMergeEvents = () => {
+      let attachSource: EditorControlPoint | undefined;
+      let attachTarget: EditorControlPoint | undefined;
+      let awaitAttachTargets: EditorControlPoint[] = [];
+      this._on('canvas', 'mouse:down', (e) => {
+        const { activePoint, points } = this.controllers;
+        if (!activePoint) return;
+
+        const { pre, next } = this._getAroundInstructions(activePoint[PATH_CONTROLLER_INFO].instruction!);
+        if (pre && next) return;
+
+        attachSource = activePoint;
+        awaitAttachTargets = points.filter(point => {
+          if (point === activePoint) return false;
+
+          const { pre, next } = this._getAroundInstructions(point[PATH_CONTROLLER_INFO].instruction!);
+          if (pre && next) return false;
+
+          return true;
+        })
+      })
+      this._on('canvas', 'mouse:move', (e) => {
+        if (!attachSource) return;
+
+        attachTarget = undefined;
+
+        awaitAttachTargets.forEach(point => {
+          if (this._inbuiltStatus.autoPathMerge && point.containsPoint(e.pointer)) {
+            point.scale(1.2);
+            attachTarget = point;
+          } else {
+            point.scale(1);
+          }
+        });
+      });
+      this._on('canvas', 'mouse:up', (e) => {
+        // 合并分段路径
+        if (attachSource && attachTarget) {
+          this._mergePath(attachSource, attachTarget);
+        }
+
+        attachSource = undefined;
+        attachTarget = undefined;
+        awaitAttachTargets.forEach(point => point.scale(1));
+        awaitAttachTargets.length = 0;
+      })
+    }
+
     registerSelectionEvents();
     registerShortcutEvents();
     registerDbclickEvents();
+    registerMergeEvents();
   }
 
   /**
