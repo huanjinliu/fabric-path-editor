@@ -32,34 +32,6 @@
         selection: false,
       });
 
-      // 创建格子背景
-      const patternSourceCanvas = new fabric.StaticCanvas(null, {
-        width: 20,
-        height: 20,
-      });
-      patternSourceCanvas.add(
-        new fabric.Rect({
-          width: 20,
-          height: 20,
-          fill: "transparent",
-          stroke: "#f1f1f1",
-          strokeWidth: 0.5,
-          strokeDashArray: [4, 2],
-        })
-      );
-      patternSourceCanvas.renderAll();
-      const bg = new fabric.Rect({
-        width: fabricCanvas.getWidth(),
-        height: fabricCanvas.getHeight(),
-        fill: new fabric.Pattern({
-          source: patternSourceCanvas.getElement(),
-          repeat: "repeat",
-        }),
-        objectCaching: false,
-        selectable: false,
-      });
-      fabricCanvas.add(bg);
-
       // 添加路径
       // const d = 'M 50 50z';
       // const d = 'M26.7846 -47 L109.923 97';
@@ -112,10 +84,10 @@
           width: document.body.clientWidth,
           height: document.body.clientHeight,
         });
-        bg.set({
-          width: fabricCanvas.getWidth(),
-          height: fabricCanvas.getHeight(),
-        });
+        // bg.set({
+        //   width: fabricCanvas.getWidth(),
+        //   height: fabricCanvas.getHeight(),
+        // });
         fabricCanvas.renderAll();
       }).observe(document.body);
     </script>

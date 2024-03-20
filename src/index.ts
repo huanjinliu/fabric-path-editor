@@ -9,8 +9,8 @@ import { CREATE_DEFAULT_LINE, CREATE_DEFAULT_POINTER, CREATE_DEFAULT_TRIGGER } f
 /** 用于标记路径编辑器元素，便于后续快速查找和辨别元素 */
 const PATH_SYMBOL = Symbol('fabric-path-editor-symbol');
 
-/** 用于记录控制器（包含关键点和控制点）的信息 */
-const PATH_CONTROLLER_INFO = Symbol('fabric-path-editor-controller-info');
+/** 用于记录对象在编辑器中记录的信息 */
+const PATH_RECORD_INFO = Symbol('fabric-path-editor-record-info');
 
 interface EditorOptions {
 }
@@ -18,7 +18,8 @@ interface EditorOptions {
 /**
  * 控制类型
  */
-enum ControlType {
+enum EditorObjectType {
+  BACKGROUND = 'background',
   MAJOR_POINT = 'major-point',
   SUB_POINT = 'sub-point',
 }
@@ -46,16 +47,16 @@ type AroundPoint = {
   instruction: Instruction;
   instructionValueIdx: number;
   point: Crood;
-  pointType: ControlType;
+  pointType: EditorObjectType;
 };
 
 /**
- * @controlType 控制点类型
+ * @EditorObjectType 对象类型
  */
 interface EditorControlPoint extends fabric.Group {
   [PATH_SYMBOL]: true;
-  [PATH_CONTROLLER_INFO]: {
-    type: ControlType;
+  [PATH_RECORD_INFO]: {
+    type: EditorObjectType.MAJOR_POINT | EditorObjectType.SUB_POINT;
     instruction?: Instruction;
     instructionValueIdx?: number;
   }
@@ -69,6 +70,7 @@ interface EditorControlHandler {
   line: fabric.Line;
   belong?: EditorControlPoint;
   belongPosition?: 'pre' | 'next';
+  hidden?: boolean;
   mirror?: EditorControlHandler;
 }
 
@@ -133,15 +135,20 @@ class FabricPathEditor {
    */
   private _inbuiltStatus = {
     /**
-     * 是否取消 handler 镜像移动
-     * @default false
+     * 执行附带操作，如控制点镜像，关键点携带控制点移动
+     * @default true
      */
-    cancelHandlerMirrorMove: false,
+    extraActions: true,
     /**
      * 是否路径端点接触合并
      * @default false
      */
     autoPathMerge: false,
+    /**
+     * 是否处于等待关键点添加的状态
+     * @default false
+     */
+    awaitAdd: true,
   }
 
   /**
@@ -285,6 +292,41 @@ class FabricPathEditor {
   }
 
   /**
+   * 判断点是否是端点（单个路径端的头尾节点）
+   */
+  private _isEndPoint(point?: EditorControlPoint) {
+    if (!point) return false;
+
+    const instruction = point[PATH_RECORD_INFO]?.instruction;
+    if (!instruction) return false;
+
+    const { pre, next } = this._getAroundInstructions(instruction);
+    return pre === undefined || next === undefined;
+  }
+
+  /**
+   * 变换后的画布坐标转画布真实坐标
+   */
+  private _toAbsoluteCrood(x: number, y: number) {
+    const [zoom, , , , offsetX, offsetY] = this._platform.viewportTransform!;
+    return {
+      x: x * zoom + offsetX,
+      y: y * zoom + offsetY
+    };
+  }
+
+  /**
+   * 画布真实坐标转变换后坐标
+   */
+  private _toRelativeCrood(x: number, y: number) {
+    const [zoom, , , , offsetX, offsetY] = this._platform.viewportTransform!;
+    return {
+      x: (x - offsetX) / zoom,
+      y: (y - offsetY) / zoom
+    };
+  }
+
+  /**
    * 路径修补
    * 
    * @note 做一些必要的路径修补操作，让后续的操作更方便
@@ -330,6 +372,46 @@ class FabricPathEditor {
 
     path.path = _itemPaths.flat(1) as unknown as fabric.Point[];
     path.pathOffset = new fabric.Point(0, 0);
+  }
+
+  /**
+   * 初始背景（将作为部分事件的触发对象）
+   */
+  private _initBackground() {
+    if (!this._platform) return;
+    // 创建格子背景
+    const patternSourceCanvas = new fabric.StaticCanvas(null, {
+      width: 20,
+      height: 20,
+    });
+    patternSourceCanvas.add(
+      new fabric.Rect({
+        width: 20,
+        height: 20,
+        fill: "transparent",
+        stroke: "#f1f1f1",
+        strokeWidth: 0.5,
+        strokeDashArray: [4, 2],
+      })
+    );
+    patternSourceCanvas.renderAll();
+    const bg = new fabric.Rect({
+      width: this._platform.getWidth(),
+      height: this._platform.getHeight(),
+      fill: new fabric.Pattern({
+        source: patternSourceCanvas.getElement(),
+        repeat: "repeat",
+      }),
+      objectCaching: false,
+      selectable: false,
+    });
+
+    bg[PATH_SYMBOL] = true;
+    bg[PATH_RECORD_INFO] = {
+      type: EditorObjectType.BACKGROUND
+    };
+
+    this._platform.add(bg);
   }
 
   /**
@@ -403,11 +485,13 @@ class FabricPathEditor {
 
     return {
       path: _path,
+      paths: itemPaths,
       cur: instruction,
       pre: preInstruction ?? null,
       next: nextInstruction ?? null,
     } as {
       path: Instruction[];
+      paths: Instruction[][];
       cur: Instruction;
       pre: Instruction | null;
       next: Instruction | null;
@@ -418,7 +502,7 @@ class FabricPathEditor {
    * 获取指令关键点
    */
   private _getInstructionMajorPoint(instruction: Instruction | null) {
-    return this.controllers.points.find(i => i[PATH_CONTROLLER_INFO].instruction === instruction);
+    return this.controllers.points.find(i => i[PATH_RECORD_INFO].instruction === instruction);
   }
 
   /**
@@ -426,7 +510,7 @@ class FabricPathEditor {
    */
   private _getAroundPoints(point: EditorControlPoint) {
     // 因为获取指令信息时会跳过闭合指令，所以这里都不需要考虑闭合指令
-    const { path, cur, pre, next } = this._getAroundInstructions(point[PATH_CONTROLLER_INFO].instruction!);
+    const { path, cur, pre, next } = this._getAroundInstructions(point[PATH_RECORD_INFO].instruction!);
 
     const curPoint: AroundPoint = {
       instruction: cur,
@@ -435,7 +519,7 @@ class FabricPathEditor {
         x: cur[cur.length - 2] as number,
         y: cur[cur.length - 1] as number,
       },
-      pointType: ControlType.MAJOR_POINT
+      pointType: EditorObjectType.MAJOR_POINT
     };
     let prePoint: AroundPoint | undefined;
     let nextPoint: AroundPoint | undefined;
@@ -452,7 +536,7 @@ class FabricPathEditor {
                 x: pre[pre.length - 4] as number,
                 y: pre[pre.length - 3] as number
               },
-              pointType: ControlType.SUB_POINT
+              pointType: EditorObjectType.SUB_POINT
             };
           } else {
             const prePre = path[2 % (path.length - 1)];
@@ -463,7 +547,7 @@ class FabricPathEditor {
                 x: prePre[prePre.length - 2] as number,
                 y: prePre[prePre.length - 1] as number
               },
-              pointType: ControlType.MAJOR_POINT
+              pointType: EditorObjectType.MAJOR_POINT
             };
           }
         }
@@ -477,7 +561,7 @@ class FabricPathEditor {
             x: pre[pre.length - 2] as number,
             y: pre[pre.length - 1] as number
           },
-          pointType: ControlType.MAJOR_POINT
+          pointType: EditorObjectType.MAJOR_POINT
         };
         break;
       case InstructionType.QUADRATIC_CURCE:
@@ -485,7 +569,7 @@ class FabricPathEditor {
           instruction: cur,
           instructionValueIdx: 1,
           point: { x: cur[1] as number, y: cur[2] as number },
-          pointType: ControlType.SUB_POINT
+          pointType: EditorObjectType.SUB_POINT
         };
         break;
       case InstructionType.BEZIER_CURVE:
@@ -493,7 +577,7 @@ class FabricPathEditor {
           instruction: cur,
           instructionValueIdx: 3,
           point: { x: cur[3] as number, y: cur[4] as number },
-          pointType: ControlType.SUB_POINT
+          pointType: EditorObjectType.SUB_POINT
         }
         break;
       default:
@@ -506,8 +590,8 @@ class FabricPathEditor {
         instructionValueIdx: 1,
         point: { x: next[1] as number, y: next[2] as number },
         pointType: CurceInstructionTypes.includes(next[0])
-          ? ControlType.SUB_POINT
-          : ControlType.MAJOR_POINT
+          ? EditorObjectType.SUB_POINT
+          : EditorObjectType.MAJOR_POINT
       }
     }
 
@@ -598,8 +682,8 @@ class FabricPathEditor {
         }) as EditorControlPoint;
 
         point[PATH_SYMBOL] = true;
-        point[PATH_CONTROLLER_INFO] = {
-          type: ControlType.MAJOR_POINT,
+        point[PATH_RECORD_INFO] = {
+          type: EditorObjectType.MAJOR_POINT,
           instruction,
           instructionValueIdx: instruction.length - 2
         };
@@ -609,29 +693,48 @@ class FabricPathEditor {
           const newCrood = this._calcRelativeCrood({ left, top });
           const oldCrood = this._calcRelativeCrood(oldPosition);
 
-          const { path } = this._getAroundInstructions(point[PATH_CONTROLLER_INFO].instruction!);
+          const { path } = this._getAroundInstructions(point[PATH_RECORD_INFO].instruction!);
           const { handlers } = this.controllers;
 
           const dLeft = newCrood.x - (instruction[instruction.length - 2] as number);
           const dTop = newCrood.y - (instruction[instruction.length - 1] as number);
 
-          // 同步控制点
+          instruction[instruction.length - 2] = newCrood.x;
+          instruction[instruction.length - 1] = newCrood.y;
+
+          // 默认同步控制点
           const preHandler = handlers?.find(i => i.belong === point && i.belongPosition === 'pre');
           if (preHandler) {
-            preHandler.point.set({
-              left: preHandler.point.left! + dLeft,
-              top: preHandler.point.top! + dTop,
-            });
+            if (this._inbuiltStatus.extraActions) {
+              preHandler.point.set({
+                left: preHandler.point.left! + dLeft,
+                top: preHandler.point.top! + dTop,
+              });
+            } else {
+              preHandler.line.set({
+                x1: left,
+                y1: top,
+                x2: preHandler.point.left!,
+                y2: preHandler.point.top!,
+              });
+            }
           }
           const nextHandler = handlers?.find(i => i.belong === point && i.belongPosition === 'next');
           if (nextHandler) {
-            nextHandler.point.set({
-              left: nextHandler.point.left! + dLeft,
-              top: nextHandler.point.top! + dTop,
-            });
+            if (this._inbuiltStatus.extraActions) {
+              nextHandler.point.set({
+                left: nextHandler.point.left! + dLeft,
+                top: nextHandler.point.top! + dTop,
+              });
+            } else {
+              nextHandler.line.set({
+                x1: left,
+                y1: top,
+                x2: nextHandler.point.left!,
+                y2: nextHandler.point.top!,
+              });
+            }
           }
-          instruction[instruction.length - 2] = newCrood.x;
-          instruction[instruction.length - 1] = newCrood.y;
 
           // 如果是路径段起始点且路径闭合需要同步最后一致指令节点
           const syncInstruction = path[path.length - 2];
@@ -677,8 +780,8 @@ class FabricPathEditor {
     }) as EditorControlPoint;
 
     point[PATH_SYMBOL] = true;
-    point[PATH_CONTROLLER_INFO] = {
-      type: ControlType.SUB_POINT
+    point[PATH_RECORD_INFO] = {
+      type: EditorObjectType.SUB_POINT
     };
 
     const line = CREATE_DEFAULT_LINE();
@@ -751,8 +854,8 @@ class FabricPathEditor {
     const itemPaths = this._splitPath(path as unknown as Instruction[]);
   
     // 提取原路径和目标路径
-    const sourceInfo = sourcePoint[PATH_CONTROLLER_INFO];
-    const targetInfo = targetPoint[PATH_CONTROLLER_INFO];
+    const sourceInfo = sourcePoint[PATH_RECORD_INFO];
+    const targetInfo = targetPoint[PATH_RECORD_INFO];
 
     let sourcePath: Instruction[] | undefined;
     let targetPath: Instruction[] | undefined;
@@ -842,7 +945,7 @@ class FabricPathEditor {
    */
   private _initEvents() {
     // 注册选中事件
-    const registerSelectionEvents = () => {
+    const registerSelectionEvent = () => {
       this._on('canvas', 'selection:created', (e) => {
         this.focus(...e.selected);
       })
@@ -855,7 +958,7 @@ class FabricPathEditor {
     }
 
     // 注册快捷键
-    const registerShortcutEvents = () => {
+    const registerShortcutEvent = () => {
       // 快捷键监听
       let activeShortcut: {
         key?: string;
@@ -867,10 +970,10 @@ class FabricPathEditor {
         {
           combinationKeys: ['alt'],
           onActivate: () => {
-            this._inbuiltStatus.cancelHandlerMirrorMove = true;
+            this._inbuiltStatus.extraActions = false;
           },
           onDeactivate: () => {
-            this._inbuiltStatus.cancelHandlerMirrorMove = false;
+            this._inbuiltStatus.extraActions = true;
           }
         },
         {
@@ -931,22 +1034,22 @@ class FabricPathEditor {
     }
 
     // 注册双击直线指令变曲线指令事件
-    const registerDbclickEvents = () => {
+    const registerDbclickEvent = () => {
       this._on('canvas', 'mouse:dblclick', (e) => {
         const target = e.target;
 
-        if (target[PATH_CONTROLLER_INFO]?.type === ControlType.MAJOR_POINT) {
+        if (target[PATH_RECORD_INFO]?.type === EditorObjectType.MAJOR_POINT) {
           const { pre, next } = this._getAroundPoints(target);
 
-          if ([pre, next].every(item => !item || item?.pointType === ControlType.SUB_POINT)) {
+          if ([pre, next].every(item => !item || item?.pointType === EditorObjectType.SUB_POINT)) {
             this.transferToLine(target, 'both');
           } else {
             this.transferToCurce(target);
           }
         }
 
-        if (target[PATH_CONTROLLER_INFO]?.type === ControlType.SUB_POINT) {
-          const { cur, pre } = this._getAroundInstructions(target[PATH_CONTROLLER_INFO].instruction!);
+        if (target[PATH_RECORD_INFO]?.type === EditorObjectType.SUB_POINT) {
+          const { cur, pre } = this._getAroundInstructions(target[PATH_RECORD_INFO].instruction!);
 
           if (cur[0] === InstructionType.BEZIER_CURVE) return;
 
@@ -964,7 +1067,7 @@ class FabricPathEditor {
     }
 
     // 注册画布路径合并事件
-    const registerMergeEvents = () => {
+    const registerMergeEvent = () => {
       let attachSource: EditorControlPoint | undefined;
       let attachTarget: EditorControlPoint | undefined;
       let awaitAttachTargets: EditorControlPoint[] = [];
@@ -972,14 +1075,14 @@ class FabricPathEditor {
         const { activePoint, points } = this.controllers;
         if (!activePoint) return;
 
-        const { pre, next } = this._getAroundInstructions(activePoint[PATH_CONTROLLER_INFO].instruction!);
+        const { pre, next } = this._getAroundInstructions(activePoint[PATH_RECORD_INFO].instruction!);
         if (pre && next) return;
 
         attachSource = activePoint;
         awaitAttachTargets = points.filter(point => {
           if (point === activePoint) return false;
 
-          const { pre, next } = this._getAroundInstructions(point[PATH_CONTROLLER_INFO].instruction!);
+          const { pre, next } = this._getAroundInstructions(point[PATH_RECORD_INFO].instruction!);
           if (pre && next) return false;
 
           return true;
@@ -1012,10 +1115,88 @@ class FabricPathEditor {
       })
     }
 
-    registerSelectionEvents();
-    registerShortcutEvents();
-    registerDbclickEvents();
-    registerMergeEvents();
+    // 注册添加关键点事件
+    const registerAddMajorEvent = () => {
+      let newInstruction: Instruction | undefined;
+      let upgradeInstruction: Instruction | undefined;
+      let newPoint: EditorControlPoint | undefined;
+      this._on('canvas', 'mouse:down:before', (event) => {
+        const { e } = event;
+
+        if (!this.target) return;
+
+        // 判断是否是添加
+        if (!this._inbuiltStatus.awaitAdd) return;
+
+        // 如果点击在背景上则触发加点事件
+        if (event.target[PATH_RECORD_INFO]?.type === EditorObjectType.BACKGROUND) {
+          const { activePoint } = this.controllers;
+          if (!activePoint) return;
+
+          // 如果当前没有聚焦端点（头尾节点）
+          const { paths, path, pre, cur, next } = this._getAroundInstructions(activePoint[PATH_RECORD_INFO]!.instruction!);
+          if (pre && next) return;
+
+          const { x, y } = this._toRelativeCrood(e.offsetX, e.offsetY);
+          const newPoint = fabric.util.transformPoint(
+            new fabric.Point(x, y),
+            fabric.util.invertTransform(this.source!.calcOwnMatrix())
+          );
+
+          if (!pre) {
+            newInstruction = [InstructionType.START, newPoint.x, newPoint.y]
+            upgradeInstruction = cur;
+            cur[0] = InstructionType.LINE;
+            path.unshift(newInstruction);
+          }
+          
+          if (!next) {
+            newInstruction = [InstructionType.LINE, newPoint.x, newPoint.y];
+            upgradeInstruction = newInstruction;
+            path.push(newInstruction);
+          }
+
+          this.target.path = paths.flat(1) as any;
+
+          this._initPathControlPoints();
+        }
+      })
+      this._on('canvas', 'mouse:down', () => {
+        if (!newInstruction) return;
+        newPoint = this._getInstructionMajorPoint(newInstruction);
+        if (newPoint) this.focus(newPoint);
+      })
+      this._on('canvas', 'mouse:move', (event) => {
+        const { e } = event;
+
+        if (newPoint && upgradeInstruction) {
+          const { x, y } = this._toRelativeCrood(e.offsetX, e.offsetY);
+          const newPoint = fabric.util.transformPoint(
+            new fabric.Point(x, y),
+            fabric.util.invertTransform(this.source!.calcOwnMatrix())
+          );
+          if (upgradeInstruction[0] === InstructionType.QUADRATIC_CURCE) {
+            upgradeInstruction[1] = newPoint.x;
+            upgradeInstruction[2] = newPoint.y;
+          } else {
+            upgradeInstruction[0] = InstructionType.QUADRATIC_CURCE;
+            upgradeInstruction.splice(1, 0, newPoint.x, newPoint.y)
+          }
+          this._updatePointHandlers();
+        }
+      });
+      this._on('canvas', 'mouse:up', (e) => {
+        newInstruction = undefined;
+        upgradeInstruction = undefined;
+        newPoint = undefined;
+      })
+    }
+
+    registerSelectionEvent();
+    registerShortcutEvent();
+    registerDbclickEvent();
+    registerMergeEvent();
+    registerAddMajorEvent();
   }
 
   /**
@@ -1025,6 +1206,9 @@ class FabricPathEditor {
     if (!this.source || this.source.type !== 'path') {
       throw Error('Please observe target path before editing.');
     }
+
+    /** 添加容器背景 */
+    this._initBackground();
 
     /** 初始绘制环境 */
     this._initPlatformStatus();
@@ -1094,7 +1278,7 @@ class FabricPathEditor {
 
     if (!activePoint) return;
 
-    const { pre, cur, next } = this._getAroundInstructions(activePoint[PATH_CONTROLLER_INFO].instruction!);
+    const { pre, cur, next } = this._getAroundInstructions(activePoint[PATH_RECORD_INFO].instruction!);
 
     const _handlers: {
       item: AroundPoint,
@@ -1140,14 +1324,15 @@ class FabricPathEditor {
       if (!point) return;
 
 
-      if (pointType !== ControlType.SUB_POINT) return;
+      if (pointType !== EditorObjectType.SUB_POINT) return;
 
       const target = this._createPathControlHandler();
 
       target.belong = belong;
       target.belongPosition = belongPosition;
-      target.point[PATH_CONTROLLER_INFO].instruction = instruction;
-      target.point[PATH_CONTROLLER_INFO].instructionValueIdx = instructionValueIdx;
+      target.hidden = hidden;
+      target.point[PATH_RECORD_INFO].instruction = instruction;
+      target.point[PATH_RECORD_INFO].instructionValueIdx = instructionValueIdx;
 
       if (hidden) {
         target.point.set({ visible: false });
@@ -1168,11 +1353,11 @@ class FabricPathEditor {
         instruction[instructionValueIdx + 1] = y;
 
         // 如果需要镜像控制点
-        if (this._inbuiltStatus.cancelHandlerMirrorMove) {
+        if (!this._inbuiltStatus.extraActions) {
           if (target.mirror) target.mirror.mirror = undefined;
           target.mirror = undefined;
         }
-        else if (this.controllers.activeHandlerPoint && target.mirror) {
+        else if (this.controllers.activeHandlerPoint && target.mirror && !target.mirror.hidden) {
           target.mirror.point.set({
             left: 2 * belong.left! - target.point.left!,
             top: 2 * belong.top! - target.point.top!
@@ -1254,7 +1439,7 @@ class FabricPathEditor {
     initHandlersStyle();
 
     if (point) {
-      if (point[PATH_CONTROLLER_INFO].type === ControlType.MAJOR_POINT) {
+      if (point[PATH_RECORD_INFO].type === EditorObjectType.MAJOR_POINT) {
         activePoint?.item(0).set({
           fill: '#ffffff'
         });
@@ -1265,7 +1450,7 @@ class FabricPathEditor {
         this._updatePointHandlers();
       }
 
-      if (point[PATH_CONTROLLER_INFO].type === ControlType.SUB_POINT) {
+      if (point[PATH_RECORD_INFO].type === EditorObjectType.SUB_POINT) {
         selectSubPoint(point);
       }
 
@@ -1294,7 +1479,7 @@ class FabricPathEditor {
     const path = this.target.path as unknown as Instruction[];
     if (!path) return;
 
-    const { type, instruction } = point[PATH_CONTROLLER_INFO];
+    const { type, instruction } = point[PATH_RECORD_INFO];
     if (!instruction) return;
 
     switch (type) {
@@ -1302,7 +1487,7 @@ class FabricPathEditor {
        * 如果是中间点将当前指令变为起始指令，否则直接删除当前关键点，
        * 并且拆分路径，下一条指令的关键点变为起始点，上一条指令变为结束点了，如果是自动闭合调整为非闭合状态
        */
-      case ControlType.MAJOR_POINT: {
+      case EditorObjectType.MAJOR_POINT: {
         const itemPaths = this._splitPath(path);
 
         const splitPathIdx = itemPaths.findIndex(i => i.includes(instruction))!;
@@ -1364,7 +1549,7 @@ class FabricPathEditor {
         break;
       }
       // 只有曲线指令才有控制点，删除控制点将直接降级成直线指令
-      case ControlType.SUB_POINT:
+      case EditorObjectType.SUB_POINT:
         const { handlers } = this.controllers;
         const handler = handlers?.find(i => i.point === point);
         if (handler) {
@@ -1386,7 +1571,7 @@ class FabricPathEditor {
   transferToLine(point: EditorControlPoint, dir: 'pre' | 'next' | 'both') {
     if (!this.controllers.points.includes(point)) return;
 
-    const { cur, next, pre } = this._getAroundInstructions(point[PATH_CONTROLLER_INFO].instruction!);
+    const { cur, next, pre } = this._getAroundInstructions(point[PATH_RECORD_INFO].instruction!);
     if (dir === 'pre' || dir === 'both') {
       const _pre = cur[0] === InstructionType.START
         ? pre
@@ -1419,7 +1604,7 @@ class FabricPathEditor {
   transferToCurce(point: EditorControlPoint) {
     if (!this.controllers.points.includes(point)) return;
 
-    const { cur, pre, next } = this._getAroundInstructions(point[PATH_CONTROLLER_INFO].instruction!);
+    const { cur, pre, next } = this._getAroundInstructions(point[PATH_RECORD_INFO].instruction!);
     if (!pre && !next) return;
 
     const _pre = cur[0] === InstructionType.START && pre ? this._getAroundInstructions(pre).pre : pre;
