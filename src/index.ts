@@ -148,7 +148,7 @@ class FabricPathEditor {
      * 是否处于等待关键点添加的状态
      * @default false
      */
-    awaitAdd: true,
+    awaitAdd: false,
   }
 
   /**
@@ -1170,17 +1170,20 @@ class FabricPathEditor {
         const { e } = event;
 
         if (newPoint && upgradeInstruction) {
+          // 如果鼠标还在点上不触发控制曲线作用，当移出后才触发，避免触发敏感
+          if (newPoint.containsPoint(event.pointer) && upgradeInstruction[0] !== InstructionType.QUADRATIC_CURCE) return;
+
           const { x, y } = this._toRelativeCrood(e.offsetX, e.offsetY);
-          const newPoint = fabric.util.transformPoint(
+          const controlPoint = fabric.util.transformPoint(
             new fabric.Point(x, y),
             fabric.util.invertTransform(this.source!.calcOwnMatrix())
           );
           if (upgradeInstruction[0] === InstructionType.QUADRATIC_CURCE) {
-            upgradeInstruction[1] = newPoint.x;
-            upgradeInstruction[2] = newPoint.y;
+            upgradeInstruction[1] = controlPoint.x;
+            upgradeInstruction[2] = controlPoint.y;
           } else {
             upgradeInstruction[0] = InstructionType.QUADRATIC_CURCE;
-            upgradeInstruction.splice(1, 0, newPoint.x, newPoint.y)
+            upgradeInstruction.splice(1, 0, controlPoint.x, controlPoint.y)
           }
           this._updatePointHandlers();
         }
@@ -1236,7 +1239,9 @@ class FabricPathEditor {
       // 路径本身不可选中，后续通过操纵点和线条来更改路径
       selectable: false,
       // 防止因为缓存没有显示正确的路径
-      objectCaching: false
+      objectCaching: false,
+      // 只有触碰到路径上才出发点击事件
+      perPixelTargetFind: true
     });
 
     this._platform.add(this.target);
