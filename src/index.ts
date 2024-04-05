@@ -137,6 +137,17 @@ class FabricPathEditor {
   }[] = [];
 
   /**
+   * 历史记录
+   */
+  records: {
+    undo: { path: string; left: number; top: number }[];
+    redo: { path: string; left: number; top: number }[];
+  } = {
+    undo: [],
+    redo: [],
+  }
+
+  /**
    * 内置状态
    */
   private _inbuiltStatus = {
@@ -677,7 +688,7 @@ class FabricPathEditor {
   /**
    * 初始路径关键点
    */
-  private _initPathControlPoints() {
+  private _initPathControlPoints(skipUpdateEvent = false) {
     const canvas = this._platform;
     const pathObj = this.target;
     if (!canvas || !pathObj) return;
@@ -742,6 +753,8 @@ class FabricPathEditor {
     this.controllers.activePoints = activePoints.filter(i => points.includes(i));
 
     this._inbuiltStatus.cancelSelectEvent = false;
+
+    if (!skipUpdateEvent) this._fire('update');
   }
 
   /**
@@ -922,6 +935,22 @@ class FabricPathEditor {
   }
 
   /**
+   * 触发编辑器事件
+   */
+  private _fire(eventName: string) {
+    if (!this.target) return;
+
+    // 标识区域便于测试
+    this.target.set({
+      backgroundColor: 'rgba(255, 125, 125, 0.8)'
+    })
+
+    if (eventName === 'update') {
+      this.updatePath();
+    }
+  }
+
+  /**
    * 添加事件监听
    */
   private _on(
@@ -1008,6 +1037,31 @@ class FabricPathEditor {
             }
           },
         },
+        {
+          key: 'z',
+          combinationKeys: ['ctrl'],
+          onActivate: () => {
+            if (this.records.undo.length > 1) {
+              let record = this.records.undo.pop();
+              if (record) {
+                this.records.redo.push(record);
+                record = this.records.undo[this.records.undo.length - 1];
+                if (record) this._initializePath(record.path, record.left, record.top);
+              }
+            }
+          }
+        },
+        {
+          key: 'z',
+          combinationKeys: ['ctrl', 'shift'],
+          onActivate: () => {
+            let record = this.records.redo.pop();
+            if (record) {
+              this.records.undo.push(record);
+              this._initializePath(record.path, record.left, record.top);
+            }
+          }
+        }
       ];
       const deactivate = () => {
         if (activeShortcut) {
@@ -1018,12 +1072,13 @@ class FabricPathEditor {
       const handleShortcutKey = (e: KeyboardEvent) => {
         let _key = e.key.toLowerCase();
 
-        shortcuts.forEach((shortcut) => {
+        // 寻找所有匹配的按键
+        const activateKeys = shortcuts.filter((shortcut) => {
           const { key, combinationKeys = [] } = shortcut;
 
-          if (!key && combinationKeys.length === 0) return;
+          if (e.type === 'keyup' && key === _key) return false;
 
-          if (e.type === 'keyup') _key = '';
+          if (!key && combinationKeys.length === 0) return false;
 
           if (
             // 没有匹配任何快捷键
@@ -1033,18 +1088,24 @@ class FabricPathEditor {
               (combinationPrefix) => !e[`${combinationPrefix}Key`]
             )
           ) {
-            if (e.type === 'keyup') deactivate();
-            return;
+            return false;
           }
 
-          if (activeShortcut === shortcut) return;
-
-          activeShortcut?.onDeactivate?.();
-
-          activeShortcut = shortcut;
-
-          activeShortcut?.onActivate();
+          return true;
         });
+        activateKeys.sort((a, b) => {
+          if (a.key && !b.key) return -1;
+          return (b.combinationKeys?.length ?? 0) - (a.combinationKeys?.length ?? 0);
+        });
+
+        const shortcut = activateKeys[0];
+        if (activeShortcut === shortcut) return;
+
+        activeShortcut?.onDeactivate?.();
+
+        activeShortcut = shortcut;
+
+        activeShortcut?.onActivate();
       };
       this._on('global', 'keydown', handleShortcutKey.bind(this));
       this._on('global', 'keyup', handleShortcutKey.bind(this));
@@ -1241,11 +1302,19 @@ class FabricPathEditor {
       });
     };
 
+    // 注册更新事件
+    const registerUpdateEvent = () => {
+      this._on('canvas', 'object:modified', (e) => {
+        this._fire('update');
+      })
+    };
+
     registerSelectionEvent();
     registerShortcutEvent();
     registerDbclickEvent();
     registerMergeEvent();
     registerAddMajorEvent();
+    registerUpdateEvent();
   }
 
   /**
@@ -1312,6 +1381,68 @@ class FabricPathEditor {
 
     // TODO: 测试
     this.focus(this.controllers.points[0], this.controllers.points[2]);
+  }
+
+  /**
+   * 重新构建路径对象
+   */
+  private _initializePath(path: string, left: number, top: number) {
+    if (!this.target) return;
+
+    this.target.initialize(path as any);
+
+    this.target.set({ left, top }).setCoords();
+
+    this._initPathControlPoints(true);
+    this._platform.renderAll();
+  }
+
+  updatePath(path?: string) {
+    if (!this.target) return;
+
+    const d = path ?? (fabric.util as any).joinPath(this.target!.path);
+  
+    const pre = this.records.undo[this.records.undo.length - 1];
+    if (pre) {
+      // 记录旧的路径中心点
+      const oldPath = new fabric.Path(pre.path);
+      const oldPathCenter = oldPath.getCenterPoint();
+
+      // 重新初始路径对象使路径占有区域重置回正确区域，但偏移会丢失
+      this.target.initialize(d as any);
+
+      // 记录新的路径中心
+      const newPathCenter = this.target.getCenterPoint();
+
+      // 计算路径偏移差值
+      const distance = fabric.util.transformPoint(
+        new fabric.Point(
+          newPathCenter.x - oldPathCenter.x,
+          newPathCenter.y - oldPathCenter.y
+        ),
+        [1, 0, 0, 1, 0, 0]
+      );
+
+      // 设置回正确的偏移位置
+      this.target.set({
+        left: pre.left! + distance.x,
+        top: pre.top! + distance.y,
+      });
+
+      this.target.setCoords();
+    }
+
+    // 记录操作历史
+    this.records.redo.length = 0;
+    this.records.undo.push({
+      left: this.target.left!,
+      top: this.target.top!,
+      path: (fabric.util as any).joinPath(this.target!.path)
+    });
+
+    // 更新控制点
+    this._initPathControlPoints(true);
+    this._platform.renderAll();
   }
 
   /**

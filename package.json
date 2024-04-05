@@ -4,6 +4,7 @@
   "description": "An editor of path for Fabric.js(http://fabricjs.com)",
   "main": "index.js",
   "scripts": {
+    "start": "npm run dev",
     "dev": "rollup --config --environment ENV:dev --watch",
     "build": "rollup --config"
   },

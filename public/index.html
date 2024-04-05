@@ -53,6 +53,8 @@
         top: fabricCanvas.getHeight() / 2
       });
       path.set({
+        left: 300,
+        top: 200,
         objectCaching: false,
         noScaleCache: false,
         fill: "transparent",
@@ -66,13 +68,19 @@
       //   height: 100,
       //   fill: 'pink'
       // }));
-      // fabricCanvas.add(path);
+      fabricCanvas.add(path);
 
       // 添加路径编辑器
       const editor = new FabricPathEditor(fabricCanvas);
 
       editor.observe(path);
-      editor.enterEditing();
+      editor.enterEditing().then(() => {
+        const path = 'M -173.6769 72 L 11.753897535592785 179.99999309036008 L 0.8922912102809732 -114.99999724893968 M -27.323083488471866 -12.499999104305942 C -27.323083488471866 -48.12229910430594 -56.2007834884719 -76.99999910430594 -91.8230834884719 -76.99999910430594 C -127.44538348847189 -76.99999910430594 -156.3230834884719 -48.12229910430594 -156.3230834884719 -12.499999104305942 C -156.3230834884719 23.122300895694053 -127.44538348847189 52.00000089569406 -91.8230834884719 52.00000089569406 C -56.2007834884719 52.00000089569406 -27.323083488471866 23.12230089569406 -27.323083488471866 -12.499999104305942';
+        setTimeout(() => {
+          editor.updatePath(path);
+        }, 3000)
+      })
+
       // editor.leaveEditing();
       // editor.destroy();
 
