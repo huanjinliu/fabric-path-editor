@@ -40,6 +40,19 @@ export const CREATE_DEFAULT_TRIGGER = () => {
   return object;
 };
 
+/** 创建路径拆分点 */
+export const CREATE_SPLIT_POINT = () => {
+  const object = new fabric.Circle({
+    radius: 10,
+    stroke: '#f00',
+    strokeWidth: 1,
+    fill: 'transparent',
+    originX: 'center',
+    originY: 'center'
+  });
+  return object;
+};
+
 /** 默认路径样式 */
 export const SET_DEFUALT_PATH_STYLE = (path: fabric.Path) => {
   path.set({ stroke: '#4b4b4b', strokeWidth: 2 });
